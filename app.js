@@ -238,6 +238,7 @@
           <div class="header-actions"><button class="icon-btn" data-action="admin">${state.adminUnlocked?"🔓 Edit":"🔒 Edit"}</button></div>
         </div>
         <div class="sample-note">${esc(label)}</div>
+        <div class="hero-divider"><span>✦</span></div>
         <div class="clock-row">◷ <span id="liveClock">${fmtClock(now)}</span></div>
         <div class="now-next">${ctx.now?`<div><b>Now:</b> ${esc(ctx.now.title)}</div>`:""}${ctx.next?`<div><b>Next:</b> ${esc(ctx.next.title)} at ${fmtTime(ctx.next.time)}</div>`:""}</div>
         <div class="header-meta"><button class="header-chip ${state.notifOn?"on":""}" data-action="notifications">${state.notifOn?"🔔 Alerts on":"🔕 Get alerts"}</button><button class="header-chip" data-action="refresh">↻ Refresh</button></div>
