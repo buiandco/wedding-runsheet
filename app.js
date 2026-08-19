@@ -67,13 +67,13 @@
       {id:"v4",role:"Venue coordinator",name:"Add name",phone:"",email:"",notes:""},
       {id:"v5",role:"Catering",name:"Add name",phone:"",email:"",notes:""}
     ],
-    settings: { eventTitle: cfg.EVENT_TITLE || "The Wedding Day", eventLabel: cfg.EVENT_LABEL || "26 September 2026" }
+    settings: { eventTitle: cfg.EVENT_TITLE || "Wedding Day", eventLabel: cfg.EVENT_LABEL || "26 September 2026", remindersEnabled:"FALSE" }
   };
 
   function clientId(prefix) { const r=(globalThis.crypto && crypto.randomUUID)?crypto.randomUUID().replace(/-/g,"").slice(0,12):Date.now().toString(36)+Math.random().toString(36).slice(2,7); return prefix+r; }
   function esc(v="") { return String(v).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
   function fmtTime(hhmm) { const [h,m] = (hhmm || "00:00").split(":").map(Number); const p=h>=12?"PM":"AM"; const h12=h%12===0?12:h%12; return `${h12}:${String(m).padStart(2,"0")} ${p}`; }
-  function fmtClock(d) { return d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit", second:"2-digit"}); }
+  function fmtClock(d) { return d.toLocaleTimeString("en-AU", {hour:"numeric", minute:"2-digit", hour12:true}); }
   function compactEventLabel(value) {
     const raw = String(value || "").trim();
     if (!raw) return "";
@@ -307,21 +307,22 @@
   function renderHeader(){
     const now=new Date(), ctx=currentContext(now), overdue=state.data.tasks.filter(t=>status(t,now)==="overdue").length;
     const settings=state.data.settings||{}, label=compactEventLabel(settings.eventLabel||cfg.EVENT_LABEL||"");
+    const remindersOn=String(settings.remindersEnabled||"").toUpperCase()==="TRUE";
     return `
       <div class="header">
         <div class="header-top">
           <div class="masthead-copy"><div class="couple-line">Jennifer and Charlie's</div><div class="title">Wedding Day</div><div class="sample-note">${esc(label)}</div></div>
         </div>
         <div class="hero-divider"><span>✦</span></div>
-        <div class="header-meta">
-          <button class="header-chip ${state.notifOn?"on":""}" data-action="notifications" title="Wedding day alerts">${state.notifOn?"🔔 Alerts on":"🔕 Alerts"}</button>
+        <div class="header-meta icon-controls">
           <button class="header-chip control-icon" data-action="refresh" title="Refresh runsheet" aria-label="Refresh runsheet">↻</button>
+          <button class="header-chip control-icon ${remindersOn?"on":""}" data-action="reminders" title="Wedding reminders" aria-label="Wedding reminders">🔔</button>
           <button class="header-chip control-icon ${state.adminUnlocked?"unlocked":""}" data-action="admin" title="${state.adminUnlocked?"Edit mode unlocked":"Unlock edit mode"}" aria-label="${state.adminUnlocked?"Edit mode unlocked":"Unlock edit mode"}">${state.adminUnlocked?"🔓":"🔒"}</button>
         </div>
-        <div class="sync-text ${state.syncWarning?"sync-warning":""}">${state.syncing?"Syncing with Google Sheet…":state.syncWarning?"Sync delayed — showing last saved copy":state.lastSync?`Last synced ${state.lastSync.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}`:"Connecting to Google Sheet…"}</div>
+        <div class="sync-text ${state.syncWarning?"sync-warning":""}">${state.syncing?"Syncing with Google Sheet…":state.syncWarning?"Sync delayed — showing last saved copy":state.lastSync?`Last synced ${state.lastSync.toLocaleTimeString("en-AU", {hour:"numeric",minute:"2-digit",hour12:true})}`:"Connecting to Google Sheet…"}</div>
       </div>
       <div class="status-dock">
-        <div class="dock-clock">◷ <span id="liveClock">${fmtClock(now)}</span></div>
+        <div class="dock-clock"><span class="clock-label">CURRENT TIME</span><span id="liveClock">${fmtClock(now)}</span></div>
         <div class="dock-context">
           ${ctx.now?`<div class="dock-now"><span>NOW</span><strong>${esc(ctx.now.title)}</strong><em>${fmtTime(ctx.now.time)}</em></div>`:`<div class="dock-now dock-clear"><span>NOW</span><strong>Nothing outstanding</strong></div>`}
           ${ctx.next?`<div class="dock-next"><span>NEXT UP</span><strong>${esc(ctx.next.title)}</strong><em>${fmtTime(ctx.next.time)}</em></div>`:""}
@@ -333,7 +334,7 @@
   }
 
   function renderTabs(){
-    const tabs=[['runsheet','☷','Runsheet'],['people','♙','My Tasks'],['vendors','▣','Vendors']]; if(state.adminUnlocked)tabs.push(['admin','⚙','Edit']);
+    const tabs=[['runsheet','☷','Runsheet'],['people','♙','My Tasks'],['vendors','▣','Vendors']];
     return `<div class="tabs">${tabs.map(([id,ic,l])=>`<button class="tab ${state.tab===id?'active':''}" data-tab="${id}">${ic} ${l}</button>`).join('')}</div>`;
   }
 
@@ -399,13 +400,31 @@
 
   function modalHtml(){
     const m=state.modal; if(!m)return '';
+    if(m.type==='reminders'){
+      const settings=state.data.settings||{};
+      const enabled=String(settings.remindersEnabled||"").toUpperCase()==="TRUE";
+      const connected=state.data.people.filter(p=>p.pushoverConnected).length;
+      const configured=state.data.tasks.filter(t=>(t.reminderMinutes||[]).length).length;
+      return `<div class="modal-backdrop"><div class="modal reminder-modal"><div class="modal-head"><div class="modal-title">Wedding reminders</div><button class="close-btn" data-close>×</button></div>
+        <div class="reminder-status ${enabled?"ready":"off"}"><span>${enabled?"●":"○"}</span><div><b>${enabled?"Automatic reminders are active":"Automatic reminders are not active yet"}</b><small>${enabled?"Google Apps Script checks the runsheet every minute.":"Complete the Apps Script reminder setup to turn them on."}</small></div></div>
+        <div class="reminder-stats"><div><strong>${connected}</strong><span>people connected</span></div><div><strong>${configured}</strong><span>tasks with reminders</span></div></div>
+        <div class="reminder-copy">Reminder timing comes from the <b>Tasks</b> sheet and each recipient comes from the <b>People</b> sheet. Example: <b>30,10,0</b> sends 30 minutes before, 10 minutes before and at the task time.</div>
+        ${state.adminUnlocked?`<div class="reminder-admin"><b>Admin tools</b>${state.data.people.filter(p=>p.pushoverConnected).length?`<select id="testReminderPerson">${state.data.people.filter(p=>p.pushoverConnected).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select><button class="primary-btn" data-test-reminder>Send test notification</button>`:`<div class="hint">Add a Pushover User Key to a person first.</div>`}</div>`:""}
+        <div class="modal-actions"><button class="primary-btn" data-close>Done</button></div>
+      </div></div>`;
+    }
     if(m.type==='unlock')return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">Edit mode</div><button class="close-btn" data-close>×</button></div>${unlockBox()}</div></div>`;
     if(m.type==='task'){
-      const t=m.item||{id:'',time:'09:00',title:'',peopleIds:[],notes:'',sortOrder:(sortedTasks().length+1)*10};
-      return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${m.isNew?'Add task':'Edit task'}</div><button class="close-btn" data-close>×</button></div><form id="taskForm"><input type="hidden" name="id" value="${esc(t.id)}"><div class="field"><label>Time</label><input name="time" type="time" value="${esc(t.time)}" required></div><div class="field"><label>Task</label><input name="title" value="${esc(t.title)}" required></div><div class="field"><label>Assigned people</label><div class="multi-select">${state.data.people.map(p=>`<button type="button" class="select-chip ${(t.peopleIds||[]).includes(p.id)?'selected':''}" data-select-person="${esc(p.id)}">${esc(p.name)}</button>`).join('')}</div><input type="hidden" name="peopleIds" value="${esc((t.peopleIds||[]).join(','))}"></div><div class="field"><label>Notes</label><textarea name="notes">${esc(t.notes||'')}</textarea></div><div class="field"><label>Sort order</label><input name="sortOrder" type="number" value="${Number(t.sortOrder)||0}"><div class="hint">Usually leave this alone. Lower numbers appear first when times match.</div></div><div class="modal-actions">${!m.isNew?`<button type="button" class="danger-btn" data-delete-task="${esc(t.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit" ${state.saving?"disabled":""}>${state.saving?"Saving…":"Save task"}</button></div></form></div></div>`;
+      const t=m.item||{id:'',time:'09:00',title:'',peopleIds:[],notes:'',sortOrder:(sortedTasks().length+1)*10,reminderMinutes:[],reminderPriority:'normal'};
+      return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${m.isNew?'Add task':'Edit task'}</div><button class="close-btn" data-close>×</button></div><form id="taskForm"><input type="hidden" name="id" value="${esc(t.id)}"><div class="field"><label>Time</label><input name="time" type="time" value="${esc(t.time)}" required></div><div class="field"><label>Task</label><input name="title" value="${esc(t.title)}" required></div><div class="field"><label>Assigned people</label><div class="multi-select">${state.data.people.map(p=>`<button type="button" class="select-chip ${(t.peopleIds||[]).includes(p.id)?'selected':''}" data-select-person="${esc(p.id)}">${esc(p.name)}</button>`).join('')}</div><input type="hidden" name="peopleIds" value="${esc((t.peopleIds||[]).join(','))}"></div><div class="field"><label>Notes</label><textarea name="notes">${esc(t.notes||'')}</textarea></div>
+      <div class="field"><label>Reminder minutes</label><input name="reminderMinutes" value="${esc((t.reminderMinutes||[]).join(','))}" placeholder="30,10,0"><div class="hint">Comma-separated minutes before the task. Use 0 for “due now”. Leave blank for no Pushover reminder.</div></div>
+      <div class="field"><label>Reminder priority</label><select name="reminderPriority"><option value="normal" ${(t.reminderPriority||'normal')==='normal'?'selected':''}>Normal</option><option value="high" ${t.reminderPriority==='high'?'selected':''}>High</option><option value="emergency" ${t.reminderPriority==='emergency'?'selected':''}>Emergency — repeats until acknowledged/expired</option><option value="low" ${t.reminderPriority==='low'?'selected':''}>Low</option></select></div>
+      <div class="field"><label>Sort order</label><input name="sortOrder" type="number" value="${Number(t.sortOrder)||0}"><div class="hint">Usually leave this alone. Lower numbers appear first when times match.</div></div><div class="modal-actions">${!m.isNew?`<button type="button" class="danger-btn" data-delete-task="${esc(t.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit" ${state.saving?"disabled":""}>${state.saving?"Saving…":"Save task"}</button></div></form></div></div>`;
     }
     if(m.type==='person'){
-      const p=m.item||{id:'',name:'',role:''}; return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${m.isNew?'Add person':'Edit person'}</div><button class="close-btn" data-close>×</button></div><form id="personForm"><input type="hidden" name="id" value="${esc(p.id)}"><div class="field"><label>Name</label><input name="name" value="${esc(p.name)}" required></div><div class="field"><label>Role</label><input name="role" value="${esc(p.role||'')}" placeholder="Bride, Groom, Maid of Honour…"></div><div class="modal-actions">${!m.isNew?`<button type="button" class="danger-btn" data-delete-person="${esc(p.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit" ${state.saving?"disabled":""}>${state.saving?"Saving…":"Save person"}</button></div></form></div></div>`;
+      const p=m.item||{id:'',name:'',role:'',pushoverKey:''}; return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${m.isNew?'Add person':'Edit person'}</div><button class="close-btn" data-close>×</button></div><form id="personForm"><input type="hidden" name="id" value="${esc(p.id)}"><div class="field"><label>Name</label><input name="name" value="${esc(p.name)}" required></div><div class="field"><label>Role</label><input name="role" value="${esc(p.role||'')}" placeholder="Bride, Groom, Maid of Honour…"></div>
+      <div class="field"><label>Pushover User Key</label><input name="pushoverKey" value="" autocomplete="off" placeholder="${p.pushoverConnected?'Connected — leave blank to keep current key':'Paste Pushover User Key'}"><div class="hint">${p.pushoverConnected?'Pushover is already connected. Leave this blank to keep the saved key, or paste a new key to replace it.':'They install Pushover, then give you their User Key. The key stays private in Google Sheets/Apps Script.'}</div></div>
+      <div class="modal-actions">${!m.isNew?`<button type="button" class="danger-btn" data-delete-person="${esc(p.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit" ${state.saving?"disabled":""}>${state.saving?"Saving…":"Save person"}</button></div></form></div></div>`;
     }
     if(m.type==='vendor'){
       const v=m.item||{id:'',role:'',name:'',phone:'',email:'',notes:''}; return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${m.isNew?'Add vendor':'Edit vendor'}</div><button class="close-btn" data-close>×</button></div><form id="vendorForm"><input type="hidden" name="id" value="${esc(v.id)}"><div class="field"><label>Role</label><input name="role" value="${esc(v.role)}" required placeholder="Photographer"></div><div class="field"><label>Name</label><input name="name" value="${esc(v.name)}" required></div><div class="field"><label>Phone</label><input name="phone" value="${esc(v.phone||'')}" type="tel"></div><div class="field"><label>Email</label><input name="email" value="${esc(v.email||'')}" type="email"></div><div class="field"><label>Notes</label><textarea name="notes">${esc(v.notes||'')}</textarea></div><div class="modal-actions">${!m.isNew?`<button type="button" class="danger-btn" data-delete-vendor="${esc(v.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit" ${state.saving?"disabled":""}>${state.saving?"Saving…":"Save vendor"}</button></div></form></div></div>`;
@@ -426,12 +445,13 @@
     app.querySelectorAll('[data-restore]').forEach(b=>b.onclick=()=>toggleDone(b.dataset.restore));
     app.querySelectorAll('[data-person]').forEach(b=>b.onclick=()=>{state.selectedPerson=b.dataset.person;render();});
     app.querySelector('[data-action="refresh"]')?.addEventListener('click',()=>loadData(true));
-    app.querySelector('[data-action="notifications"]')?.addEventListener('click',enableNotifications);
+    app.querySelector('[data-action="reminders"]')?.addEventListener('click',()=>{state.modal={type:'reminders'};render();});
     app.querySelector('[data-action="admin"]')?.addEventListener('click',()=>{if(state.adminUnlocked){state.tab='admin';render();}else{state.modal={type:'unlock'};render();}});
     app.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>{state.modal=null;render();});
+    app.querySelector('[data-test-reminder]')?.addEventListener('click',async()=>{const sel=app.querySelector('#testReminderPerson');if(!sel)return;const personId=sel.value;try{state.saving=true;await api('sendTestReminder',{personId},true);state.modal=null;state.success='Test notification sent';render();setTimeout(()=>{if(state.success==='Test notification sent'){state.success='';render();}},2500);}catch(e){state.error=e.message;render();}finally{state.saving=false;}});
     app.querySelector('[data-lock]')?.addEventListener('click',()=>{lockAdmin();state.tab='runsheet';render();});
-    app.querySelector('[data-new-task]')?.addEventListener('click',()=>{const max=Math.max(0,...state.data.tasks.map(t=>Number(t.sortOrder)||0));state.modal={type:'task',isNew:true,item:{id:clientId('t'),time:'09:00',title:'',peopleIds:[],notes:'',sortOrder:max+10}};render();});
-    app.querySelector('[data-new-person]')?.addEventListener('click',()=>{state.modal={type:'person',isNew:true,item:{id:clientId('p'),name:'',role:''}};render();});
+    app.querySelector('[data-new-task]')?.addEventListener('click',()=>{const max=Math.max(0,...state.data.tasks.map(t=>Number(t.sortOrder)||0));state.modal={type:'task',isNew:true,item:{id:clientId('t'),time:'09:00',title:'',peopleIds:[],notes:'',sortOrder:max+10,reminderMinutes:[],reminderPriority:'normal'}};render();});
+    app.querySelector('[data-new-person]')?.addEventListener('click',()=>{state.modal={type:'person',isNew:true,item:{id:clientId('p'),name:'',role:'',pushoverKey:''}};render();});
     app.querySelector('[data-new-vendor]')?.addEventListener('click',()=>{state.modal={type:'vendor',isNew:true,item:{id:clientId('v'),role:'',name:'',phone:'',email:'',notes:''}};render();});
     app.querySelectorAll('[data-edit-task]').forEach(b=>b.onclick=()=>{state.modal={type:'task',item:state.data.tasks.find(x=>x.id===b.dataset.editTask)};render();});
     app.querySelectorAll('[data-edit-person]').forEach(b=>b.onclick=()=>{state.modal={type:'person',item:state.data.people.find(x=>x.id===b.dataset.editPerson)};render();});
@@ -439,15 +459,15 @@
 
     const unlockForm=app.querySelector('#unlockForm'); if(unlockForm)unlockForm.onsubmit=e=>{e.preventDefault();unlock(app.querySelector('#pinInput').value);};
     app.querySelectorAll('[data-select-person]').forEach(b=>b.onclick=()=>{b.classList.toggle('selected');const ids=[...app.querySelectorAll('[data-select-person].selected')].map(x=>x.dataset.selectPerson);app.querySelector('input[name="peopleIds"]').value=ids.join(',');});
-    const tf=app.querySelector('#taskForm'); if(tf)tf.onsubmit=e=>{e.preventDefault();const f=new FormData(tf);saveAction('saveTask',{id:f.get('id')||'',time:f.get('time'),title:f.get('title'),peopleIds:String(f.get('peopleIds')||'').split(',').filter(Boolean),notes:f.get('notes')||'',sortOrder:Number(f.get('sortOrder')||0)},true,'Task saved');};
-    const pf=app.querySelector('#personForm'); if(pf)pf.onsubmit=e=>{e.preventDefault();const f=new FormData(pf);saveAction('savePerson',{id:f.get('id')||'',name:f.get('name'),role:f.get('role')||''},true,'Person saved');};
+    const tf=app.querySelector('#taskForm'); if(tf)tf.onsubmit=e=>{e.preventDefault();const f=new FormData(tf);saveAction('saveTask',{id:f.get('id')||'',time:f.get('time'),title:f.get('title'),peopleIds:String(f.get('peopleIds')||'').split(',').filter(Boolean),notes:f.get('notes')||'',sortOrder:Number(f.get('sortOrder')||0),reminderMinutes:String(f.get('reminderMinutes')||'').split(',').map(x=>Number(x.trim())).filter(x=>Number.isFinite(x)&&x>=0),reminderPriority:f.get('reminderPriority')||'normal'},true,'Task saved');};
+    const pf=app.querySelector('#personForm'); if(pf)pf.onsubmit=e=>{e.preventDefault();const f=new FormData(pf);saveAction('savePerson',{id:f.get('id')||'',name:f.get('name'),role:f.get('role')||'',pushoverKey:f.get('pushoverKey')||''},true,'Person saved');};
     const vf=app.querySelector('#vendorForm'); if(vf)vf.onsubmit=e=>{e.preventDefault();const f=new FormData(vf);saveAction('saveVendor',{id:f.get('id')||'',role:f.get('role'),name:f.get('name'),phone:f.get('phone')||'',email:f.get('email')||'',notes:f.get('notes')||''},true,'Vendor saved');};
     app.querySelector('[data-delete-task]')?.addEventListener('click',e=>{if(confirm('Delete this task?'))saveAction('deleteTask',{id:e.currentTarget.dataset.deleteTask},true,'Task deleted');});
     app.querySelector('[data-delete-person]')?.addEventListener('click',e=>{if(confirm('Delete this person? They will also be removed from assigned tasks.'))saveAction('deletePerson',{id:e.currentTarget.dataset.deletePerson},true,'Person deleted');});
     app.querySelector('[data-delete-vendor]')?.addEventListener('click',e=>{if(confirm('Delete this vendor?'))saveAction('deleteVendor',{id:e.currentTarget.dataset.deleteVendor},true,'Vendor deleted');});
   }
 
-  setInterval(()=>{const el=document.getElementById('liveClock');if(el)el.textContent=fmtClock(new Date());checkNotifications();},1000);
+  setInterval(()=>{const el=document.getElementById('liveClock');if(el)el.textContent=fmtClock(new Date());},1000);
   setInterval(()=>{ if (!state.modal && !state.saving) loadData(true); }, Math.max(5000, Number(cfg.POLL_MS)||10000));
   const hasCache = readCache();
   if (hasCache) render();
