@@ -20,6 +20,7 @@
     syncing: false,
     syncWarning: "",
     pendingDone: {},
+    activeWrites: 0,
     celebratingTaskId: null
   };
 
@@ -135,6 +136,9 @@
   }
 
   async function loadData(silent=false) {
+    // Never let background polling race an active write. The optimistic UI remains
+    // authoritative until Google has confirmed the write.
+    if (silent && state.activeWrites > 0) return;
     if (state.syncing) return;
     state.syncing = true;
     if (!silent && !state.data.tasks.length && !state.data.people.length && !state.data.vendors.length) { state.loading = true; render(); }
@@ -238,31 +242,45 @@
 
   async function toggleDone(id) {
     const task=state.data.tasks.find(t=>t.id===id); if(!task)return;
-    const previous = task.done;
+    const previous = !!task.done;
     const desired = !previous;
+
+    // Install the guard BEFORE rendering/sending. A getData request that was already
+    // in flight is therefore unable to paint the old Sheet value back over this tap.
+    state.pendingDone[id] = {done:desired, until:Date.now()+30000, phase:"writing"};
+    state.activeWrites += 1;
     task.done = desired;
     state.celebratingTaskId = desired ? id : null;
     state.error = "";
     render();
     if (desired) setTimeout(()=>{ if(state.celebratingTaskId===id){ state.celebratingTaskId=null; render(); } }, 900);
+
     try {
       if(!cfg.USE_DEMO_DATA) {
         const out=await api("toggleDone",{id},false);
-        if(typeof out.done==="boolean") task.done=out.done;
-        state.pendingDone[id] = {done:task.done, until:Date.now()+15000};
+        const confirmed = typeof out.done === "boolean" ? out.done : desired;
+        // loadData may have replaced state.data while this request was in flight, so
+        // always re-find the CURRENT task object instead of mutating the old reference.
+        const currentTask = state.data.tasks.find(t=>t.id===id);
+        if(currentTask) currentTask.done = confirmed;
+        state.pendingDone[id] = {done:confirmed, until:Date.now()+30000, phase:"confirmed"};
         state.lastSync=new Date();
         state.syncWarning="";
         writeCache();
         render();
       } else {
+        state.pendingDone[id] = {done:desired, until:Date.now()+3000, phase:"confirmed"};
         writeCache();
       }
     } catch(e){
-      task.done=previous;
+      const currentTask = state.data.tasks.find(t=>t.id===id);
+      if(currentTask) currentTask.done=previous;
       delete state.pendingDone[id];
       state.celebratingTaskId=null;
       state.error=e.message;
       render();
+    } finally {
+      state.activeWrites = Math.max(0, state.activeWrites - 1);
     }
   }
 
@@ -292,12 +310,14 @@
     return `
       <div class="header">
         <div class="header-top">
-          <div><div class="couple-line">Jennifer and Charlie's</div><div class="title">Wedding Day</div></div>
-          <div class="header-actions"><button class="icon-btn" data-action="admin">${state.adminUnlocked?"🔓 Edit":"🔒 Edit"}</button></div>
+          <div class="masthead-copy"><div class="couple-line">Jennifer and Charlie's</div><div class="title">Wedding Day</div><div class="sample-note">${esc(label)}</div></div>
         </div>
-        <div class="sample-note">${esc(label)}</div>
         <div class="hero-divider"><span>✦</span></div>
-        <div class="header-meta"><button class="header-chip ${state.notifOn?"on":""}" data-action="notifications">${state.notifOn?"🔔 Alerts on":"🔕 Get alerts"}</button><button class="header-chip" data-action="refresh">↻ Refresh</button></div>
+        <div class="header-meta">
+          <button class="header-chip ${state.notifOn?"on":""}" data-action="notifications" title="Wedding day alerts">${state.notifOn?"🔔 Alerts on":"🔕 Alerts"}</button>
+          <button class="header-chip control-icon" data-action="refresh" title="Refresh runsheet" aria-label="Refresh runsheet">↻</button>
+          <button class="header-chip control-icon ${state.adminUnlocked?"unlocked":""}" data-action="admin" title="${state.adminUnlocked?"Edit mode unlocked":"Unlock edit mode"}" aria-label="${state.adminUnlocked?"Edit mode unlocked":"Unlock edit mode"}">${state.adminUnlocked?"🔓":"🔒"}</button>
+        </div>
         <div class="sync-text ${state.syncWarning?"sync-warning":""}">${state.syncing?"Syncing with Google Sheet…":state.syncWarning?"Sync delayed — showing last saved copy":state.lastSync?`Last synced ${state.lastSync.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}`:"Connecting to Google Sheet…"}</div>
       </div>
       <div class="status-dock">
@@ -394,7 +414,7 @@
   }
 
   function render(){
-    if(state.loading){app.innerHTML=`<div class="shell"><div class="header"><div class="couple-line">Jennifer and Charlie's</div><div class="title">Wedding Day</div><div class="sample-note">${esc(compactEventLabel(cfg.EVENT_LABEL||""))}</div></div><div class="loading"><div class="spinner"></div><b>Connecting to the live schedule…</b><div class="loading-sub">First visits can take a few seconds. After this, the last synced runsheet opens instantly while Google refreshes in the background.</div></div></div>`;return;}
+    if(state.loading){app.innerHTML=`<div class="shell"><div class="header"><div class="masthead-copy"><div class="couple-line">Jennifer and Charlie's</div><div class="title">Wedding Day</div><div class="sample-note">${esc(compactEventLabel(cfg.EVENT_LABEL||""))}</div></div></div><div class="loading"><div class="spinner"></div><b>Connecting to the live schedule…</b><div class="loading-sub">First visits can take a few seconds. After this, the last synced runsheet opens instantly while Google refreshes in the background.</div></div></div>`;return;}
     const panel=state.tab==='runsheet'?renderRunsheet():state.tab==='people'?renderPeople():state.tab==='vendors'?renderVendors():renderAdmin();
     app.innerHTML=`<div class="shell">${renderHeader()}${renderTabs()}${panel}</div>${modalHtml()}`;
     bindEvents();

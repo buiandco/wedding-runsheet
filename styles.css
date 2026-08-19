@@ -465,3 +465,68 @@ button:disabled,input:disabled{opacity:.58;cursor:wait}.primary-btn:disabled{cur
   .dock-now>em,.dock-next>em{font-size:10px}
   .tabs{top:96px}
 }
+
+
+/* === V3.6 centered wedding masthead + write-safe sync === */
+.header-top{display:block;text-align:center}
+.masthead-copy{text-align:center;width:100%}
+.couple-line{
+  font-family:"Cormorant Garamond",Georgia,"Times New Roman",serif;
+  font-size:30px;
+  line-height:1.04;
+  font-weight:600;
+  letter-spacing:-.35px;
+  text-transform:none;
+  color:var(--rose-dark);
+  margin:0 0 4px;
+}
+.title{text-align:center;font-size:47px;line-height:.98;margin:0 auto 5px}
+.sample-note{text-align:center;font-size:17px;margin:6px auto 16px}
+.header-meta{justify-content:center;align-items:center;margin-top:0}
+.header-chip{min-height:34px;justify-content:center}
+.header-chip.control-icon{width:34px;height:34px;padding:0;border-radius:50%;font-size:16px}
+.header-chip.control-icon.unlocked{background:var(--sage-bg);border-color:rgba(135,148,135,.35)}
+.sync-text{text-align:center}
+
+/* Make the sticky live time genuinely readable. */
+.dock-clock{
+  min-width:112px;
+  justify-content:center;
+  font-size:18px;
+  font-weight:850;
+  letter-spacing:-.2px;
+  color:var(--ink);
+}
+.status-dock{grid-template-columns:auto minmax(0,1fr)}
+.dock-now,.dock-next{min-height:76px;padding:11px 13px}
+.dock-now>span,.dock-next>span{font-size:10px}
+.dock-now>strong,.dock-next>strong{font-size:15px;line-height:1.23}
+.dock-now>em,.dock-next>em{font-size:12px}
+.tabs{top:100px}
+
+@media(max-width:520px){
+  .couple-line{font-size:27px;line-height:1.02;margin-bottom:3px}
+  .title{font-size:42px}
+  .sample-note{font-size:16px;margin-top:5px;margin-bottom:12px}
+  .header-meta{gap:7px}
+  .header-chip{font-size:11px;padding:6px 10px;min-height:32px}
+  .header-chip.control-icon{width:32px;height:32px;font-size:15px}
+  .status-dock{grid-template-columns:1fr;padding:10px 10px 11px;gap:6px}
+  .dock-clock{
+    position:static;
+    width:100%;
+    height:auto;
+    min-height:34px;
+    border:0;
+    background:transparent;
+    font-size:20px;
+    padding:0 0 2px;
+    justify-content:center;
+  }
+  .dock-context{padding-top:0;grid-template-columns:1fr 1fr;gap:7px}
+  .dock-now,.dock-next{min-height:76px;padding:10px 10px 9px}
+  .dock-now>span,.dock-next>span{font-size:9px}
+  .dock-now>strong,.dock-next>strong{font-size:13.5px;line-height:1.2}
+  .dock-now>em,.dock-next>em{font-size:10.5px}
+  .tabs{top:127px}
+}
