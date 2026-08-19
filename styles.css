@@ -567,3 +567,76 @@ button:disabled,input:disabled{opacity:.58;cursor:wait}.primary-btn:disabled{cur
   .dock-now>em,.dock-next>em{font-size:10px}
   .tabs{top:135px}
 }
+
+/* === V3.9 stronger time hierarchy + animated Now/Next emphasis === */
+#liveClock{
+  font-size:30px;
+  line-height:1.05;
+  font-weight:850;
+  letter-spacing:-.9px;
+}
+.dock-clock{padding:10px 12px 12px;margin-bottom:10px}
+.dock-clock .clock-label{font-size:8.5px;letter-spacing:1.55px}
+.dock-now,.dock-next{min-height:78px;padding:12px 13px 13px}
+.dock-now>span,.dock-next>span{font-size:9.5px}
+.dock-now>strong,.dock-next>strong{font-size:15px;line-height:1.24}
+.dock-now>em,.dock-next>em{font-size:13px;font-weight:900}
+
+/* Make schedule times easier to scan throughout the day. */
+.item-time{font-size:13px;letter-spacing:.75px;margin-bottom:6px}
+.stack-time{font-size:12.5px;letter-spacing:.025em}
+.vendor-role{font-size:11.5px}
+
+/* NOW gets a distinctive jewellery-like champagne/rose shimmer. */
+.dock-now.now-bling{
+  position:relative;
+  overflow:hidden;
+  border-color:rgba(166,104,97,.55);
+  background:linear-gradient(140deg,rgba(255,252,250,.98),rgba(247,230,225,.96));
+  box-shadow:0 6px 20px rgba(137,84,78,.10),0 0 0 1px rgba(195,156,126,.16) inset;
+  animation:nowBreathe 2.7s ease-in-out infinite;
+}
+.dock-now.now-bling::before{
+  content:"";
+  position:absolute;
+  inset:-35% -70%;
+  background:linear-gradient(105deg,transparent 35%,rgba(255,255,255,.15) 43%,rgba(255,244,225,.68) 50%,rgba(255,255,255,.18) 57%,transparent 65%);
+  transform:translateX(-58%) rotate(2deg);
+  animation:nowSweep 3.4s ease-in-out infinite;
+  pointer-events:none;
+}
+.dock-now.now-bling::after{
+  content:"✦";
+  position:absolute;
+  right:10px;
+  top:8px;
+  font-size:11px;
+  color:#b89669;
+  opacity:.72;
+  animation:nowSpark 2.1s ease-in-out infinite;
+}
+.dock-now.now-bling>*{position:relative;z-index:1}
+@keyframes nowBreathe{0%,100%{box-shadow:0 6px 18px rgba(137,84,78,.08),0 0 0 1px rgba(195,156,126,.14) inset}50%{box-shadow:0 8px 28px rgba(164,94,88,.19),0 0 0 2px rgba(205,170,132,.19) inset}}
+@keyframes nowSweep{0%,40%{transform:translateX(-58%) rotate(2deg);opacity:0}55%{opacity:.9}78%,100%{transform:translateX(58%) rotate(2deg);opacity:0}}
+@keyframes nowSpark{0%,100%{transform:scale(.82) rotate(0deg);opacity:.35}50%{transform:scale(1.25) rotate(18deg);opacity:1}}
+
+/* NEXT UP softly gains weight and contrast as its time approaches. */
+.dock-next{transition:background .5s ease,border-color .5s ease,box-shadow .5s ease,transform .5s ease,opacity .5s ease}
+.dock-next.next-soft{opacity:.74;background:rgba(255,255,255,.64)}
+.dock-next.next-warming{opacity:.86;background:linear-gradient(140deg,rgba(255,255,255,.83),rgba(248,243,237,.82));border-color:rgba(181,157,131,.34)}
+.dock-next.next-near{opacity:.95;background:linear-gradient(140deg,rgba(255,255,255,.94),rgba(244,235,228,.92));border-color:rgba(169,132,119,.44);box-shadow:0 5px 16px rgba(108,83,72,.07)}
+.dock-next.next-imminent{opacity:1;background:linear-gradient(140deg,rgba(255,252,249,.98),rgba(240,225,219,.96));border-color:rgba(157,98,91,.52);box-shadow:0 7px 20px rgba(143,91,83,.12);animation:nextPulse 1.9s ease-in-out infinite}
+@keyframes nextPulse{0%,100%{transform:translateY(0);box-shadow:0 7px 18px rgba(143,91,83,.09)}50%{transform:translateY(-1px);box-shadow:0 9px 24px rgba(143,91,83,.17)}}
+
+@media (max-width:390px){
+  #liveClock{font-size:27px}
+  .dock-now,.dock-next{min-height:76px;padding:11px 10px 11px}
+  .dock-now>strong,.dock-next>strong{font-size:13.5px}
+  .dock-now>em,.dock-next>em{font-size:12px}
+  .item-time{font-size:12.5px}
+  .stack-time{font-size:12px}
+}
+
+@media (prefers-reduced-motion:reduce){
+  .dock-now.now-bling,.dock-now.now-bling::before,.dock-now.now-bling::after,.dock-next.next-imminent{animation:none!important}
+}

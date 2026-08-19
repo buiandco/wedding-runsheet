@@ -73,13 +73,16 @@
   function clientId(prefix) { const r=(globalThis.crypto && crypto.randomUUID)?crypto.randomUUID().replace(/-/g,"").slice(0,12):Date.now().toString(36)+Math.random().toString(36).slice(2,7); return prefix+r; }
   function esc(v="") { return String(v).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
   function fmtTime(hhmm) { const [h,m] = (hhmm || "00:00").split(":").map(Number); const p=h>=12?"PM":"AM"; const h12=h%12===0?12:h%12; return `${h12}:${String(m).padStart(2,"0")} ${p}`; }
-  function fmtClock(d) { return d.toLocaleTimeString("en-AU", {hour:"numeric", minute:"2-digit", hour12:true}); }
+  function fmtClock(d) { return d.toLocaleTimeString("en-AU", {hour:"numeric", minute:"2-digit", second:"2-digit", hour12:true}); }
   function compactEventLabel(value) {
     const raw = String(value || "").trim();
     if (!raw) return "";
     const parsed = new Date(raw);
     if (!Number.isNaN(parsed.getTime())) {
-      return parsed.toLocaleDateString("en-AU", {weekday:"short", day:"numeric", month:"short", year:"numeric"}).replace(",", "");
+      const day = parsed.getDate();
+      const month = parsed.toLocaleDateString("en-AU", {month:"short"}) === "Sep" ? "Sept" : parsed.toLocaleDateString("en-AU", {month:"short"});
+      const year = String(parsed.getFullYear()).slice(-2);
+      return `${day} ${month} ${year}`;
     }
     return raw.replace(/\s+\d{1,2}:\d{2}:\d{2}.*$/i, "").replace(/\s+GMT[+-]\d{4}.*$/i, "").trim();
   }
@@ -308,6 +311,8 @@
     const now=new Date(), ctx=currentContext(now), overdue=state.data.tasks.filter(t=>status(t,now)==="overdue").length;
     const settings=state.data.settings||{}, label=compactEventLabel(settings.eventLabel||cfg.EVENT_LABEL||"");
     const remindersOn=String(settings.remindersEnabled||"").toUpperCase()==="TRUE";
+    const nextMinutes = ctx.next ? Math.max(0, Math.round((timeToday(ctx.next.time, now)-now)/60000)) : null;
+    const nextTone = nextMinutes === null ? "" : nextMinutes <= 5 ? "next-imminent" : nextMinutes <= 15 ? "next-near" : nextMinutes <= 30 ? "next-warming" : "next-soft";
     return `
       <div class="header">
         <div class="header-top">
@@ -319,13 +324,13 @@
           <button class="header-chip control-icon ${remindersOn?"on":""}" data-action="reminders" title="Wedding reminders" aria-label="Wedding reminders">🔔</button>
           <button class="header-chip control-icon ${state.adminUnlocked?"unlocked":""}" data-action="admin" title="${state.adminUnlocked?"Edit mode unlocked":"Unlock edit mode"}" aria-label="${state.adminUnlocked?"Edit mode unlocked":"Unlock edit mode"}">${state.adminUnlocked?"🔓":"🔒"}</button>
         </div>
-        <div class="sync-text ${state.syncWarning?"sync-warning":""}">${state.syncing?"Syncing with Google Sheet…":state.syncWarning?"Sync delayed — showing last saved copy":state.lastSync?`Last synced ${state.lastSync.toLocaleTimeString("en-AU", {hour:"numeric",minute:"2-digit",hour12:true})}`:"Connecting to Google Sheet…"}</div>
+        <div class="sync-text ${state.syncWarning?"sync-warning":""}">${state.syncing?"Syncing with Google Sheet…":state.syncWarning?"Sync delayed — showing last saved copy":state.lastSync?`Last synced ${state.lastSync.toLocaleTimeString("en-AU", {hour:"numeric",minute:"2-digit",second:"2-digit",hour12:true})}`:"Connecting to Google Sheet…"}</div>
       </div>
       <div class="status-dock">
         <div class="dock-clock"><span class="clock-label">CURRENT TIME</span><span id="liveClock">${fmtClock(now)}</span></div>
         <div class="dock-context">
-          ${ctx.now?`<div class="dock-now"><span>NOW</span><strong>${esc(ctx.now.title)}</strong><em>${fmtTime(ctx.now.time)}</em></div>`:`<div class="dock-now dock-clear"><span>NOW</span><strong>Nothing outstanding</strong></div>`}
-          ${ctx.next?`<div class="dock-next"><span>NEXT UP</span><strong>${esc(ctx.next.title)}</strong><em>${fmtTime(ctx.next.time)}</em></div>`:""}
+          ${ctx.now?`<div class="dock-now now-bling"><span>NOW</span><strong>${esc(ctx.now.title)}</strong><em>${fmtTime(ctx.now.time)}</em></div>`:`<div class="dock-now dock-clear"><span>NOW</span><strong>Nothing outstanding</strong></div>`}
+          ${ctx.next?`<div class="dock-next ${nextTone}"><span>NEXT UP</span><strong>${esc(ctx.next.title)}</strong><em>${fmtTime(ctx.next.time)}</em></div>`:""}
         </div>
       </div>
       ${overdue?`<div class="overdue-banner">⚠ ${overdue} task${overdue===1?"":"s"} outstanding</div>`:""}
@@ -407,9 +412,9 @@
       const configured=state.data.tasks.filter(t=>(t.reminderMinutes||[]).length).length;
       return `<div class="modal-backdrop"><div class="modal reminder-modal"><div class="modal-head"><div class="modal-title">Wedding reminders</div><button class="close-btn" data-close>×</button></div>
         <div class="reminder-status ${enabled?"ready":"off"}"><span>${enabled?"●":"○"}</span><div><b>${enabled?"Automatic reminders are active":"Automatic reminders are not active yet"}</b><small>${enabled?"Google Apps Script checks the runsheet every minute.":"Complete the Apps Script reminder setup to turn them on."}</small></div></div>
-        <div class="reminder-stats"><div><strong>${connected}</strong><span>people connected</span></div><div><strong>${configured}</strong><span>tasks with reminders</span></div></div>
-        <div class="reminder-copy">Reminder timing comes from the <b>Tasks</b> sheet and each recipient comes from the <b>People</b> sheet. Example: <b>30,10,0</b> sends 30 minutes before, 10 minutes before and at the task time.</div>
-        ${state.adminUnlocked?`<div class="reminder-admin"><b>Admin tools</b>${state.data.people.filter(p=>p.pushoverConnected).length?`<select id="testReminderPerson">${state.data.people.filter(p=>p.pushoverConnected).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select><button class="primary-btn" data-test-reminder>Send test notification</button>`:`<div class="hint">Add a Pushover User Key to a person first.</div>`}</div>`:""}
+        <div class="reminder-stats"><div><strong>${connected}</strong><span>devices assigned</span></div><div><strong>${configured}</strong><span>tasks with reminders</span></div></div>
+        <div class="reminder-copy">Reminder timing comes from the <b>Tasks</b> sheet and each recipient's device name comes from the <b>People</b> sheet. Example: <b>30,10,0</b> sends 30 minutes before, 10 minutes before and at the task time.</div>
+        ${state.adminUnlocked?`<div class="reminder-admin"><b>Admin tools</b>${state.data.people.filter(p=>p.pushoverConnected).length?`<select id="testReminderPerson">${state.data.people.filter(p=>p.pushoverConnected).map(p=>`<option value="${esc(p.id)}">${esc(p.name)}</option>`).join("")}</select><button class="primary-btn" data-test-reminder>Send test notification</button>`:`<div class="hint">Assign a Pushover device name to a person first.</div>`}</div>`:""}
         <div class="modal-actions"><button class="primary-btn" data-close>Done</button></div>
       </div></div>`;
     }
@@ -422,8 +427,8 @@
       <div class="field"><label>Sort order</label><input name="sortOrder" type="number" value="${Number(t.sortOrder)||0}"><div class="hint">Usually leave this alone. Lower numbers appear first when times match.</div></div><div class="modal-actions">${!m.isNew?`<button type="button" class="danger-btn" data-delete-task="${esc(t.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit" ${state.saving?"disabled":""}>${state.saving?"Saving…":"Save task"}</button></div></form></div></div>`;
     }
     if(m.type==='person'){
-      const p=m.item||{id:'',name:'',role:'',pushoverKey:''}; return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${m.isNew?'Add person':'Edit person'}</div><button class="close-btn" data-close>×</button></div><form id="personForm"><input type="hidden" name="id" value="${esc(p.id)}"><div class="field"><label>Name</label><input name="name" value="${esc(p.name)}" required></div><div class="field"><label>Role</label><input name="role" value="${esc(p.role||'')}" placeholder="Bride, Groom, Maid of Honour…"></div>
-      <div class="field"><label>Pushover User Key</label><input name="pushoverKey" value="" autocomplete="off" placeholder="${p.pushoverConnected?'Connected — leave blank to keep current key':'Paste Pushover User Key'}"><div class="hint">${p.pushoverConnected?'Pushover is already connected. Leave this blank to keep the saved key, or paste a new key to replace it.':'They install Pushover, then give you their User Key. The key stays private in Google Sheets/Apps Script.'}</div></div>
+      const p=m.item||{id:'',name:'',role:'',pushoverDevice:''}; return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${m.isNew?'Add person':'Edit person'}</div><button class="close-btn" data-close>×</button></div><form id="personForm"><input type="hidden" name="id" value="${esc(p.id)}"><div class="field"><label>Name</label><input name="name" value="${esc(p.name)}" required></div><div class="field"><label>Role</label><input name="role" value="${esc(p.role||'')}" placeholder="Bride, Groom, Maid of Honour…"></div>
+      <div class="field"><label>Pushover device name</label><input name="pushoverDevice" value="${esc(p.pushoverDevice||'')}" autocomplete="off" placeholder="jennifer"><div class="hint">Use the exact device name registered in the shared Pushover account, for example <b>jennifer</b>, <b>charlie</b> or <b>mc</b>. All devices share one Pushover account/User Key; this field chooses which phone receives this person's reminders.</div></div>
       <div class="modal-actions">${!m.isNew?`<button type="button" class="danger-btn" data-delete-person="${esc(p.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit" ${state.saving?"disabled":""}>${state.saving?"Saving…":"Save person"}</button></div></form></div></div>`;
     }
     if(m.type==='vendor'){
@@ -451,7 +456,7 @@
     app.querySelector('[data-test-reminder]')?.addEventListener('click',async()=>{const sel=app.querySelector('#testReminderPerson');if(!sel)return;const personId=sel.value;try{state.saving=true;await api('sendTestReminder',{personId},true);state.modal=null;state.success='Test notification sent';render();setTimeout(()=>{if(state.success==='Test notification sent'){state.success='';render();}},2500);}catch(e){state.error=e.message;render();}finally{state.saving=false;}});
     app.querySelector('[data-lock]')?.addEventListener('click',()=>{lockAdmin();state.tab='runsheet';render();});
     app.querySelector('[data-new-task]')?.addEventListener('click',()=>{const max=Math.max(0,...state.data.tasks.map(t=>Number(t.sortOrder)||0));state.modal={type:'task',isNew:true,item:{id:clientId('t'),time:'09:00',title:'',peopleIds:[],notes:'',sortOrder:max+10,reminderMinutes:[],reminderPriority:'normal'}};render();});
-    app.querySelector('[data-new-person]')?.addEventListener('click',()=>{state.modal={type:'person',isNew:true,item:{id:clientId('p'),name:'',role:'',pushoverKey:''}};render();});
+    app.querySelector('[data-new-person]')?.addEventListener('click',()=>{state.modal={type:'person',isNew:true,item:{id:clientId('p'),name:'',role:'',pushoverDevice:''}};render();});
     app.querySelector('[data-new-vendor]')?.addEventListener('click',()=>{state.modal={type:'vendor',isNew:true,item:{id:clientId('v'),role:'',name:'',phone:'',email:'',notes:''}};render();});
     app.querySelectorAll('[data-edit-task]').forEach(b=>b.onclick=()=>{state.modal={type:'task',item:state.data.tasks.find(x=>x.id===b.dataset.editTask)};render();});
     app.querySelectorAll('[data-edit-person]').forEach(b=>b.onclick=()=>{state.modal={type:'person',item:state.data.people.find(x=>x.id===b.dataset.editPerson)};render();});
@@ -460,7 +465,7 @@
     const unlockForm=app.querySelector('#unlockForm'); if(unlockForm)unlockForm.onsubmit=e=>{e.preventDefault();unlock(app.querySelector('#pinInput').value);};
     app.querySelectorAll('[data-select-person]').forEach(b=>b.onclick=()=>{b.classList.toggle('selected');const ids=[...app.querySelectorAll('[data-select-person].selected')].map(x=>x.dataset.selectPerson);app.querySelector('input[name="peopleIds"]').value=ids.join(',');});
     const tf=app.querySelector('#taskForm'); if(tf)tf.onsubmit=e=>{e.preventDefault();const f=new FormData(tf);saveAction('saveTask',{id:f.get('id')||'',time:f.get('time'),title:f.get('title'),peopleIds:String(f.get('peopleIds')||'').split(',').filter(Boolean),notes:f.get('notes')||'',sortOrder:Number(f.get('sortOrder')||0),reminderMinutes:String(f.get('reminderMinutes')||'').split(',').map(x=>Number(x.trim())).filter(x=>Number.isFinite(x)&&x>=0),reminderPriority:f.get('reminderPriority')||'normal'},true,'Task saved');};
-    const pf=app.querySelector('#personForm'); if(pf)pf.onsubmit=e=>{e.preventDefault();const f=new FormData(pf);saveAction('savePerson',{id:f.get('id')||'',name:f.get('name'),role:f.get('role')||'',pushoverKey:f.get('pushoverKey')||''},true,'Person saved');};
+    const pf=app.querySelector('#personForm'); if(pf)pf.onsubmit=e=>{e.preventDefault();const f=new FormData(pf);saveAction('savePerson',{id:f.get('id')||'',name:f.get('name'),role:f.get('role')||'',pushoverDevice:f.get('pushoverDevice')||''},true,'Person saved');};
     const vf=app.querySelector('#vendorForm'); if(vf)vf.onsubmit=e=>{e.preventDefault();const f=new FormData(vf);saveAction('saveVendor',{id:f.get('id')||'',role:f.get('role'),name:f.get('name'),phone:f.get('phone')||'',email:f.get('email')||'',notes:f.get('notes')||''},true,'Vendor saved');};
     app.querySelector('[data-delete-task]')?.addEventListener('click',e=>{if(confirm('Delete this task?'))saveAction('deleteTask',{id:e.currentTarget.dataset.deleteTask},true,'Task deleted');});
     app.querySelector('[data-delete-person]')?.addEventListener('click',e=>{if(confirm('Delete this person? They will also be removed from assigned tasks.'))saveAction('deletePerson',{id:e.currentTarget.dataset.deletePerson},true,'Person deleted');});
