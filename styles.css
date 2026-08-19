@@ -435,3 +435,33 @@ button:disabled,input:disabled{opacity:.58;cursor:wait}.primary-btn:disabled{cur
   .stack-main{display:block}.stack-title,.stack-who{display:block}.stack-who{margin-top:2px}
 }
 @media(prefers-reduced-motion:reduce){.completed-wrap,.completed-inline-card{transition:none!important}}
+
+
+/* === V3.5 reliability + iPhone status/header refinement === */
+.couple-line{font-family:"Manrope",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:11px;font-weight:800;letter-spacing:2.1px;text-transform:uppercase;color:var(--rose);margin:3px 0 8px}
+.sync-text.sync-warning{color:#9A6B55;font-weight:700}
+.status-dock{padding:11px 13px 12px;gap:11px}
+.dock-context{gap:9px}
+.dock-now,.dock-next{padding:10px 12px;min-height:67px;border-radius:15px}
+.dock-now>span,.dock-next>span{font-size:9px;letter-spacing:1.45px}
+.dock-now>strong,.dock-next>strong{font-size:14px;line-height:1.25;font-weight:850}
+.dock-now>em,.dock-next>em{font-size:11.5px;font-weight:850}
+.dock-clock{font-size:11.5px;padding:0 11px}
+.tabs{top:90px}
+@media(max-width:520px){
+  .header{padding-top:24px;padding-bottom:19px}
+  .title{font-size:40px}
+  .couple-line{font-size:10px;letter-spacing:1.8px;margin-bottom:6px}
+  .sample-note{font-size:14px;margin-top:6px;margin-bottom:13px}
+  .hero-divider{margin-bottom:12px}
+  .header-meta{margin-top:9px}
+  .sync-text{margin-top:7px}
+  .status-dock{grid-template-columns:1fr;padding:10px 10px 11px;gap:7px}
+  .dock-clock{position:absolute;right:13px;top:8px;height:21px;padding:0;border:0;background:transparent;font-size:9.5px}
+  .dock-context{grid-template-columns:1fr 1fr;gap:7px;padding-top:11px}
+  .dock-now,.dock-next{padding:9px 9px 8px;min-height:68px}
+  .dock-now>span,.dock-next>span{font-size:8.5px}
+  .dock-now>strong,.dock-next>strong{font-size:12.5px;line-height:1.22;white-space:normal;display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden}
+  .dock-now>em,.dock-next>em{font-size:10px}
+  .tabs{top:96px}
+}

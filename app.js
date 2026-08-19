@@ -18,6 +18,8 @@
     saving: false,
     unlocking: false,
     syncing: false,
+    syncWarning: "",
+    pendingDone: {},
     celebratingTaskId: null
   };
 
@@ -71,6 +73,15 @@
   function esc(v="") { return String(v).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
   function fmtTime(hhmm) { const [h,m] = (hhmm || "00:00").split(":").map(Number); const p=h>=12?"PM":"AM"; const h12=h%12===0?12:h%12; return `${h12}:${String(m).padStart(2,"0")} ${p}`; }
   function fmtClock(d) { return d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit", second:"2-digit"}); }
+  function compactEventLabel(value) {
+    const raw = String(value || "").trim();
+    if (!raw) return "";
+    const parsed = new Date(raw);
+    if (!Number.isNaN(parsed.getTime())) {
+      return parsed.toLocaleDateString("en-AU", {weekday:"short", day:"numeric", month:"short", year:"numeric"}).replace(",", "");
+    }
+    return raw.replace(/\s+\d{1,2}:\d{2}:\d{2}.*$/i, "").replace(/\s+GMT[+-]\d{4}.*$/i, "").trim();
+  }
   function timeToday(hhmm, base=new Date()) { const [h,m]=(hhmm||"00:00").split(":").map(Number); const d=new Date(base); d.setHours(h,m,0,0); return d; }
   function sortedTasks() { return [...state.data.tasks].sort((a,b)=>(Number(a.sortOrder)||0)-(Number(b.sortOrder)||0) || String(a.time).localeCompare(String(b.time))); }
   function status(task, now=new Date()) { if (task.done) return "complete"; return now >= timeToday(task.time, now) ? "overdue" : "upcoming"; }
@@ -128,13 +139,32 @@
     state.syncing = true;
     if (!silent && !state.data.tasks.length && !state.data.people.length && !state.data.vendors.length) { state.loading = true; render(); }
     try {
-      if (cfg.USE_DEMO_DATA) state.data = structuredClone(demoData);
-      else { const out = await api("getData"); state.data = out.data; }
+      let incoming;
+      if (cfg.USE_DEMO_DATA) incoming = structuredClone(demoData);
+      else { const out = await api("getData"); incoming = out.data; }
+
+      // Preserve a just-confirmed completion across Google's briefly stale cached reads.
+      const nowMs = Date.now();
+      for (const [id, guard] of Object.entries(state.pendingDone)) {
+        const t = (incoming.tasks || []).find(x => x.id === id);
+        if (!t || nowMs >= guard.until || t.done === guard.done) {
+          delete state.pendingDone[id];
+        } else {
+          t.done = guard.done;
+        }
+      }
+
+      state.data = incoming;
       state.lastSync = new Date();
       state.error = "";
+      state.syncWarning = "";
       writeCache();
     } catch (e) {
-      state.error = e.message;
+      if (silent && (state.data.tasks.length || state.data.people.length || state.data.vendors.length)) {
+        state.syncWarning = e.message;
+      } else {
+        state.error = e.message;
+      }
     } finally {
       state.loading = false;
       state.syncing = false;
@@ -167,8 +197,7 @@
       state.success = success;
       render();
       setTimeout(()=>{ if(state.success===success){state.success="";render();}},2500);
-      // Reconcile with any manual Sheet edits shortly afterwards, without blocking the save UI.
-      setTimeout(()=>loadData(true), 800);
+      // Let the normal poll reconcile manual Sheet edits; an immediate read can be stale.
     } catch(e) {
       if (/PIN|Unauthorized/i.test(e.message)) lockAdmin();
       state.error = e.message;
@@ -209,13 +238,32 @@
 
   async function toggleDone(id) {
     const task=state.data.tasks.find(t=>t.id===id); if(!task)return;
-    const markingDone = !task.done;
-    task.done=!task.done;
-    state.celebratingTaskId = markingDone ? id : null;
+    const previous = task.done;
+    const desired = !previous;
+    task.done = desired;
+    state.celebratingTaskId = desired ? id : null;
+    state.error = "";
     render();
-    if (markingDone) setTimeout(()=>{ if(state.celebratingTaskId===id){ state.celebratingTaskId=null; render(); } }, 900);
-    try { if(!cfg.USE_DEMO_DATA) { const out=await api("toggleDone",{id},false); if(typeof out.done==="boolean") task.done=out.done; state.lastSync=new Date(); writeCache(); render(); setTimeout(()=>loadData(true),800); } }
-    catch(e){ task.done=!task.done; state.celebratingTaskId=null; state.error=e.message; render(); }
+    if (desired) setTimeout(()=>{ if(state.celebratingTaskId===id){ state.celebratingTaskId=null; render(); } }, 900);
+    try {
+      if(!cfg.USE_DEMO_DATA) {
+        const out=await api("toggleDone",{id},false);
+        if(typeof out.done==="boolean") task.done=out.done;
+        state.pendingDone[id] = {done:task.done, until:Date.now()+15000};
+        state.lastSync=new Date();
+        state.syncWarning="";
+        writeCache();
+        render();
+      } else {
+        writeCache();
+      }
+    } catch(e){
+      task.done=previous;
+      delete state.pendingDone[id];
+      state.celebratingTaskId=null;
+      state.error=e.message;
+      render();
+    }
   }
 
   async function enableNotifications(){
@@ -240,17 +288,17 @@
 
   function renderHeader(){
     const now=new Date(), ctx=currentContext(now), overdue=state.data.tasks.filter(t=>status(t,now)==="overdue").length;
-    const settings=state.data.settings||{}, title=settings.eventTitle||cfg.EVENT_TITLE||"The Wedding Day", label=settings.eventLabel||cfg.EVENT_LABEL||"";
+    const settings=state.data.settings||{}, label=compactEventLabel(settings.eventLabel||cfg.EVENT_LABEL||"");
     return `
       <div class="header">
         <div class="header-top">
-          <div><div class="eyebrow">Live Runsheet</div><div class="title">${esc(title)}</div></div>
+          <div><div class="couple-line">Jennifer and Charlie's</div><div class="title">Wedding Day</div></div>
           <div class="header-actions"><button class="icon-btn" data-action="admin">${state.adminUnlocked?"🔓 Edit":"🔒 Edit"}</button></div>
         </div>
         <div class="sample-note">${esc(label)}</div>
         <div class="hero-divider"><span>✦</span></div>
         <div class="header-meta"><button class="header-chip ${state.notifOn?"on":""}" data-action="notifications">${state.notifOn?"🔔 Alerts on":"🔕 Get alerts"}</button><button class="header-chip" data-action="refresh">↻ Refresh</button></div>
-        <div class="sync-text">${state.syncing?"Syncing with Google Sheet…":state.lastSync?`Last synced ${state.lastSync.toLocaleTimeString([], {hour:"numeric",minute:"2-digit",second:"2-digit"})}`:"Connecting to Google Sheet…"}</div>
+        <div class="sync-text ${state.syncWarning?"sync-warning":""}">${state.syncing?"Syncing with Google Sheet…":state.syncWarning?"Sync delayed — showing last saved copy":state.lastSync?`Last synced ${state.lastSync.toLocaleTimeString([], {hour:"numeric",minute:"2-digit"})}`:"Connecting to Google Sheet…"}</div>
       </div>
       <div class="status-dock">
         <div class="dock-clock">◷ <span id="liveClock">${fmtClock(now)}</span></div>
@@ -346,7 +394,7 @@
   }
 
   function render(){
-    if(state.loading){app.innerHTML=`<div class="shell"><div class="header"><div class="eyebrow">Live Runsheet</div><div class="title">${esc(cfg.EVENT_TITLE||"The Wedding Day")}</div><div class="sample-note">${esc(cfg.EVENT_LABEL||"")}</div></div><div class="loading"><div class="spinner"></div><b>Connecting to the live schedule…</b><div class="loading-sub">First visits can take a few seconds. After this, the last synced runsheet opens instantly while Google refreshes in the background.</div></div></div>`;return;}
+    if(state.loading){app.innerHTML=`<div class="shell"><div class="header"><div class="couple-line">Jennifer and Charlie's</div><div class="title">Wedding Day</div><div class="sample-note">${esc(compactEventLabel(cfg.EVENT_LABEL||""))}</div></div><div class="loading"><div class="spinner"></div><b>Connecting to the live schedule…</b><div class="loading-sub">First visits can take a few seconds. After this, the last synced runsheet opens instantly while Google refreshes in the background.</div></div></div>`;return;}
     const panel=state.tab==='runsheet'?renderRunsheet():state.tab==='people'?renderPeople():state.tab==='vendors'?renderVendors():renderAdmin();
     app.innerHTML=`<div class="shell">${renderHeader()}${renderTabs()}${panel}</div>${modalHtml()}`;
     bindEvents();
