@@ -229,8 +229,13 @@
   }
 
   function currentContext(now=new Date()){
-    const tasks=sortedTasks(); let idx=-1; tasks.forEach((t,i)=>{if(timeToday(t.time,now)<=now)idx=i;});
-    return {now:idx>=0?tasks[idx]:null,next:idx+1<tasks.length?tasks[idx+1]:null};
+    const live=sortedTasks().filter(t=>!t.done);
+    const overdue=live.filter(t=>now>=timeToday(t.time,now));
+    const upcoming=live.filter(t=>now<timeToday(t.time,now));
+    // Keep the status dock focused on unfinished work. The oldest outstanding item
+    // is "Now"; the next future task is "Next up". When Now is completed, the
+    // following task immediately takes its place.
+    return {now:overdue[0]||null,next:upcoming[0]||null};
   }
 
   function renderHeader(){
@@ -244,10 +249,15 @@
         </div>
         <div class="sample-note">${esc(label)}</div>
         <div class="hero-divider"><span>✦</span></div>
-        <div class="clock-row">◷ <span id="liveClock">${fmtClock(now)}</span></div>
-        <div class="now-next">${ctx.now?`<div><b>Now:</b> ${esc(ctx.now.title)}</div>`:""}${ctx.next?`<div><b>Next:</b> ${esc(ctx.next.title)} at ${fmtTime(ctx.next.time)}</div>`:""}</div>
         <div class="header-meta"><button class="header-chip ${state.notifOn?"on":""}" data-action="notifications">${state.notifOn?"🔔 Alerts on":"🔕 Get alerts"}</button><button class="header-chip" data-action="refresh">↻ Refresh</button></div>
         <div class="sync-text">${state.syncing?"Syncing with Google Sheet…":state.lastSync?`Last synced ${state.lastSync.toLocaleTimeString([], {hour:"numeric",minute:"2-digit",second:"2-digit"})}`:"Connecting to Google Sheet…"}</div>
+      </div>
+      <div class="status-dock">
+        <div class="dock-clock">◷ <span id="liveClock">${fmtClock(now)}</span></div>
+        <div class="dock-context">
+          ${ctx.now?`<div class="dock-now"><span>NOW</span><strong>${esc(ctx.now.title)}</strong><em>${fmtTime(ctx.now.time)}</em></div>`:`<div class="dock-now dock-clear"><span>NOW</span><strong>Nothing outstanding</strong></div>`}
+          ${ctx.next?`<div class="dock-next"><span>NEXT UP</span><strong>${esc(ctx.next.title)}</strong><em>${fmtTime(ctx.next.time)}</em></div>`:""}
+        </div>
       </div>
       ${overdue?`<div class="overdue-banner">⚠ ${overdue} task${overdue===1?"":"s"} outstanding</div>`:""}
       ${state.error?`<div class="error-banner">⚠ ${esc(state.error)}</div>`:""}
@@ -259,10 +269,19 @@
     return `<div class="tabs">${tabs.map(([id,ic,l])=>`<button class="tab ${state.tab===id?'active':''}" data-tab="${id}">${ic} ${l}</button>`).join('')}</div>`;
   }
 
-  function taskCard(t, compact=false){
+  function taskCard(t, compact=false, stackIndex=0){
     const s=status(t), pm=personMap(), names=(t.peopleIds||[]).map(id=>pm[id]?.name).filter(Boolean).join(', ');
     const celebration = state.celebratingTaskId === t.id ? " just-completed" : "";
-    return `<div class="item ${s}${celebration}${compact?' compact-complete':''}"><div class="marker"><span class="dot">${s==='complete'?'✓':''}</span></div><div class="card"><div class="item-time">${fmtTime(t.time)}</div><div class="item-title">${esc(t.title)}</div>${names?`<div class="item-who">${esc(names)}</div>`:''}${t.notes&&!compact?`<div class="item-notes">${esc(t.notes)}</div>`:''}${s==='overdue'?`<div class="status">⚠ Outstanding</div>`:''}<div><button class="check-btn" data-toggle="${esc(t.id)}">${t.done?'Mark not done':'Mark done'}</button></div><span class="card-ornament"></span></div></div>`;
+    if(compact){
+      return `<button class="completed-stack-card" style="--stack:${Math.min(stackIndex,6)}" data-restore="${esc(t.id)}" title="Tap to move this task back to the live runsheet"><span class="stack-check">✓</span><span class="stack-time">${fmtTime(t.time)}</span><span class="stack-title">${esc(t.title)}</span><span class="stack-back">↶</span></button>`;
+    }
+    return `<div class="item ${s}${celebration}"><div class="marker"><span class="dot">${s==='complete'?'✓':''}</span></div><div class="card"><div class="item-time">${fmtTime(t.time)}</div><div class="item-title">${esc(t.title)}</div>${names?`<div class="item-who">${esc(names)}</div>`:''}${t.notes?`<div class="item-notes">${esc(t.notes)}</div>`:''}${s==='overdue'?`<div class="status">⚠ Outstanding</div>`:''}<div><button class="check-btn" data-toggle="${esc(t.id)}">Mark done</button></div><span class="card-ornament"></span></div></div>`;
+  }
+
+  function completedStack(completed){
+    if(!completed.length) return '';
+    const newest=[...completed].reverse();
+    return `<section class="completed-section"><div class="completed-head"><span>Completed · tap a card to restore</span><span>${completed.length}</span></div><div class="completed-stack">${newest.map((t,i)=>taskCard(t,true,i)).join('')}</div></section>`;
   }
 
   function renderRunsheet(){
@@ -271,7 +290,7 @@
     const live=tasks.filter(t=>!t.done), completed=tasks.filter(t=>t.done);
     return `<div class="panel">
       ${live.length?`<div class="timeline live-timeline">${live.map(taskCard).join('')}</div>`:`<div class="all-done-note">All scheduled tasks are complete ✓</div>`}
-      ${completed.length?`<section class="completed-section"><div class="completed-head"><span>Completed</span><span>${completed.length}</span></div><div class="completed-rail">${completed.map(t=>taskCard(t,true)).join('')}</div></section>`:''}
+      ${completedStack(completed)}
     </div>`;
   }
   function renderPeople(){
@@ -279,7 +298,7 @@
     let taskMarkup='';
     if(selected && tasks.length){
       const live=tasks.filter(t=>!t.done), completed=tasks.filter(t=>t.done);
-      taskMarkup=`${live.length?`<div class="timeline live-timeline">${live.map(taskCard).join('')}</div>`:`<div class="all-done-note">All your scheduled tasks are complete ✓</div>`}${completed.length?`<section class="completed-section"><div class="completed-head"><span>Completed</span><span>${completed.length}</span></div><div class="completed-rail">${completed.map(t=>taskCard(t,true)).join('')}</div></section>`:''}`;
+      taskMarkup=`${live.length?`<div class="timeline live-timeline">${live.map(taskCard).join('')}</div>`:`<div class="all-done-note">All your scheduled tasks are complete ✓</div>`}${completedStack(completed)}`;
     }
     return `<div class="panel"><div class="pills">${p.map(x=>`<button class="pill ${selected===x.id?'active':''}" data-person="${esc(x.id)}">${esc(x.name)} <span class="pill-role">${esc(x.role||'')}</span></button>`).join('')}</div>${!selected?`<div class="empty">Tap a name to see that person's tasks<br>and what time they need to happen.</div>`:tasks.length?taskMarkup:`<div class="empty">No tasks assigned yet.</div>`}</div>`;
   }
@@ -335,6 +354,7 @@
   function bindEvents(){
     app.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;render();});
     app.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>toggleDone(b.dataset.toggle));
+    app.querySelectorAll('[data-restore]').forEach(b=>b.onclick=()=>toggleDone(b.dataset.restore));
     app.querySelectorAll('[data-person]').forEach(b=>b.onclick=()=>{state.selectedPerson=b.dataset.person;render();});
     app.querySelector('[data-action="refresh"]')?.addEventListener('click',()=>loadData(true));
     app.querySelector('[data-action="notifications"]')?.addEventListener('click',enableNotifications);
