@@ -17,7 +17,8 @@
     notified: new Set(),
     saving: false,
     unlocking: false,
-    syncing: false
+    syncing: false,
+    celebratingTaskId: null
   };
 
   const app = document.getElementById("app");
@@ -208,9 +209,13 @@
 
   async function toggleDone(id) {
     const task=state.data.tasks.find(t=>t.id===id); if(!task)return;
-    task.done=!task.done; render();
+    const markingDone = !task.done;
+    task.done=!task.done;
+    state.celebratingTaskId = markingDone ? id : null;
+    render();
+    if (markingDone) setTimeout(()=>{ if(state.celebratingTaskId===id){ state.celebratingTaskId=null; render(); } }, 900);
     try { if(!cfg.USE_DEMO_DATA) { const out=await api("toggleDone",{id},false); if(typeof out.done==="boolean") task.done=out.done; state.lastSync=new Date(); writeCache(); render(); setTimeout(()=>loadData(true),800); } }
-    catch(e){ task.done=!task.done; state.error=e.message; render(); }
+    catch(e){ task.done=!task.done; state.celebratingTaskId=null; state.error=e.message; render(); }
   }
 
   async function enableNotifications(){
@@ -256,7 +261,8 @@
 
   function taskCard(t){
     const s=status(t), pm=personMap(), names=(t.peopleIds||[]).map(id=>pm[id]?.name).filter(Boolean).join(', ');
-    return `<div class="item ${s}"><div class="marker"><span class="dot">${s==='complete'?'✓':''}</span></div><div class="card"><div class="item-time">${fmtTime(t.time)}</div><div class="item-title">${esc(t.title)}</div>${names?`<div class="item-who">${esc(names)}</div>`:''}${t.notes?`<div class="item-notes">${esc(t.notes)}</div>`:''}${s==='overdue'?`<div class="status">⚠ Outstanding</div>`:''}<div><button class="check-btn" data-toggle="${esc(t.id)}">${t.done?'Mark not done':'Mark done'}</button></div></div></div>`;
+    const celebration = state.celebratingTaskId === t.id ? " just-completed" : "";
+    return `<div class="item ${s}${celebration}"><div class="marker"><span class="dot">${s==='complete'?'✓':''}</span></div><div class="card"><div class="item-time">${fmtTime(t.time)}</div><div class="item-title">${esc(t.title)}</div>${names?`<div class="item-who">${esc(names)}</div>`:''}${t.notes?`<div class="item-notes">${esc(t.notes)}</div>`:''}${s==='overdue'?`<div class="status">⚠ Outstanding</div>`:''}<div><button class="check-btn" data-toggle="${esc(t.id)}">${t.done?'Mark not done':'Mark done'}</button></div><span class="card-ornament"></span></div></div>`;
   }
 
   function renderRunsheet(){ const tasks=sortedTasks(); return `<div class="panel">${tasks.length?`<div class="timeline">${tasks.map(taskCard).join('')}</div>`:`<div class="empty">No tasks have been added yet.</div>`}</div>`; }
