@@ -15,10 +15,30 @@
     modal: null,
     notifOn: typeof Notification !== "undefined" && Notification.permission === "granted",
     notified: new Set(),
-    saving: false
+    saving: false,
+    unlocking: false,
+    syncing: false
   };
 
   const app = document.getElementById("app");
+  const CACHE_KEY = "weddingRunsheetCacheV2";
+
+  function readCache() {
+    try {
+      const raw = localStorage.getItem(CACHE_KEY);
+      if (!raw) return false;
+      const cached = JSON.parse(raw);
+      if (!cached || !cached.data || !Array.isArray(cached.data.tasks)) return false;
+      state.data = cached.data;
+      state.lastSync = cached.syncedAt ? new Date(cached.syncedAt) : null;
+      state.loading = false;
+      return true;
+    } catch { return false; }
+  }
+
+  function writeCache() {
+    try { localStorage.setItem(CACHE_KEY, JSON.stringify({data:state.data, syncedAt:state.lastSync ? state.lastSync.toISOString() : new Date().toISOString()})); } catch {}
+  }
 
   const demoData = {
     tasks: [
@@ -46,6 +66,7 @@
     settings: { eventTitle: cfg.EVENT_TITLE || "The Wedding Day", eventLabel: cfg.EVENT_LABEL || "26 September 2026" }
   };
 
+  function clientId(prefix) { const r=(globalThis.crypto && crypto.randomUUID)?crypto.randomUUID().replace(/-/g,"").slice(0,12):Date.now().toString(36)+Math.random().toString(36).slice(2,7); return prefix+r; }
   function esc(v="") { return String(v).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
   function fmtTime(hhmm) { const [h,m] = (hhmm || "00:00").split(":").map(Number); const p=h>=12?"PM":"AM"; const h12=h%12===0?12:h%12; return `${h12}:${String(m).padStart(2,"0")} ${p}`; }
   function fmtClock(d) { return d.toLocaleTimeString([], {hour:"numeric", minute:"2-digit", second:"2-digit"}); }
@@ -58,52 +79,100 @@
   async function api(action, payload={}, admin=false) {
     if (cfg.USE_DEMO_DATA) return {ok:true, data:demoData};
     if (!cfg.API_URL || cfg.API_URL.includes("PASTE_YOUR")) throw new Error("Connect the Google Apps Script Web App URL in frontend/config.js first.");
-    const body = new URLSearchParams();
-    body.set("action", action);
-    body.set("payload", JSON.stringify(payload));
-    if (admin) body.set("pin", state.pin);
-    const res = await fetch(cfg.API_URL, { method:"POST", body });
-    const json = await res.json();
-    if (!json.ok) throw new Error(json.error || "Request failed");
-    return json;
+
+    const attempt = async () => {
+      const body = new URLSearchParams();
+      body.set("action", action);
+      body.set("payload", JSON.stringify(payload));
+      if (admin) body.set("pin", state.pin);
+
+      const controller = new AbortController();
+      const timer = setTimeout(() => controller.abort(), Math.max(6000, Number(cfg.REQUEST_TIMEOUT_MS) || 15000));
+      let res;
+      try {
+        res = await fetch(cfg.API_URL, { method:"POST", body, signal:controller.signal, redirect:"follow", cache:"no-store" });
+      } catch (err) {
+        if (err && err.name === "AbortError") throw new Error("Google Sheets is taking longer than expected. Your screen is still usable — try again or tap Refresh.");
+        throw new Error("Could not reach Google Sheets. Check your connection and try again.");
+      } finally { clearTimeout(timer); }
+
+      const text = await res.text();
+      const trimmed = text.trim();
+      if (!res.ok) throw new Error(`Google returned HTTP ${res.status}. Try again in a moment.`);
+      if (!trimmed || trimmed.startsWith("<") || /<!doctype|<html/i.test(trimmed.slice(0,200))) {
+        throw new Error("Google returned a web page instead of runsheet data. Tap Refresh and try again. If this keeps happening, redeploy the Apps Script as 'Anyone' access.");
+      }
+
+      let json;
+      try { json = JSON.parse(trimmed); }
+      catch { throw new Error("Google returned an unreadable response. Tap Refresh and try again."); }
+      if (!json.ok) throw new Error(json.error || "Request failed");
+      return json;
+    };
+
+    // Reads and PIN checks are safe to retry once. Writes are deliberately NOT retried
+    // because a lost response after a successful write could otherwise create duplicates.
+    try { return await attempt(); }
+    catch (err) {
+      if (action === "getData" || action === "verifyPin") {
+        await new Promise(r => setTimeout(r, 650));
+        return await attempt();
+      }
+      throw err;
+    }
   }
 
   async function loadData(silent=false) {
-    if (!silent) state.loading = true;
+    if (state.syncing) return;
+    state.syncing = true;
+    if (!silent && !state.data.tasks.length && !state.data.people.length && !state.data.vendors.length) { state.loading = true; render(); }
     try {
-      if (cfg.USE_DEMO_DATA) {
-        state.data = structuredClone(demoData);
-      } else {
-        const out = await api("getData");
-        state.data = out.data;
-      }
+      if (cfg.USE_DEMO_DATA) state.data = structuredClone(demoData);
+      else { const out = await api("getData"); state.data = out.data; }
       state.lastSync = new Date();
       state.error = "";
+      writeCache();
     } catch (e) {
       state.error = e.message;
     } finally {
       state.loading = false;
+      state.syncing = false;
       render();
     }
+  }
+
+  function applyConfirmedMutation(action, payload, out={}) {
+    const p = {...payload};
+    if (out.id && !p.id) p.id = out.id;
+    applyDemoMutation(action, p);
+    state.lastSync = new Date();
+    writeCache();
   }
 
   async function saveAction(action, payload, admin=true, success="Saved") {
     if (state.saving) return;
     state.saving = true;
+    render();
     try {
-      if (cfg.USE_DEMO_DATA) {
-        applyDemoMutation(action,payload);
-      } else {
-        await api(action, payload, admin);
-        await loadData(true);
+      let out = {ok:true};
+      if (cfg.USE_DEMO_DATA) applyDemoMutation(action,payload);
+      else {
+        out = await api(action, payload, admin);
+        applyConfirmedMutation(action, payload, out);
       }
+      if (cfg.USE_DEMO_DATA) writeCache();
       state.modal = null;
-      flash("success", success);
+      state.error = "";
+      state.success = success;
+      render();
+      setTimeout(()=>{ if(state.success===success){state.success="";render();}},2500);
+      // Reconcile with any manual Sheet edits shortly afterwards, without blocking the save UI.
+      setTimeout(()=>loadData(true), 800);
     } catch(e) {
       if (/PIN|Unauthorized/i.test(e.message)) lockAdmin();
       state.error = e.message;
       render();
-    } finally { state.saving=false; }
+    } finally { state.saving=false; render(); }
   }
 
   function applyDemoMutation(action,p) {
@@ -120,7 +189,11 @@
   function lockAdmin(){ state.pin=""; state.adminUnlocked=false; sessionStorage.removeItem("weddingAdminPin"); sessionStorage.removeItem("weddingAdminUnlocked"); }
 
   async function unlock(pin) {
+    if (state.unlocking) return;
     state.pin = pin;
+    state.unlocking = true;
+    state.error = "";
+    render();
     try {
       if (!cfg.USE_DEMO_DATA) await api("verifyPin", {}, true);
       state.adminUnlocked = true;
@@ -129,14 +202,14 @@
       state.tab="admin";
       state.modal=null;
       state.error="";
-      render();
-    } catch(e){ lockAdmin(); state.error=e.message; render(); }
+    } catch(e){ lockAdmin(); state.error=e.message; }
+    finally { state.unlocking=false; render(); }
   }
 
   async function toggleDone(id) {
     const task=state.data.tasks.find(t=>t.id===id); if(!task)return;
     task.done=!task.done; render();
-    try { if(!cfg.USE_DEMO_DATA) { await api("toggleDone",{id},false); await loadData(true); } }
+    try { if(!cfg.USE_DEMO_DATA) { const out=await api("toggleDone",{id},false); if(typeof out.done==="boolean") task.done=out.done; state.lastSync=new Date(); writeCache(); render(); setTimeout(()=>loadData(true),800); } }
     catch(e){ task.done=!task.done; state.error=e.message; render(); }
   }
 
@@ -168,7 +241,7 @@
         <div class="clock-row">◷ <span id="liveClock">${fmtClock(now)}</span></div>
         <div class="now-next">${ctx.now?`<div><b>Now:</b> ${esc(ctx.now.title)}</div>`:""}${ctx.next?`<div><b>Next:</b> ${esc(ctx.next.title)} at ${fmtTime(ctx.next.time)}</div>`:""}</div>
         <div class="header-meta"><button class="header-chip ${state.notifOn?"on":""}" data-action="notifications">${state.notifOn?"🔔 Alerts on":"🔕 Get alerts"}</button><button class="header-chip" data-action="refresh">↻ Refresh</button></div>
-        <div class="sync-text">${state.lastSync?`Last synced ${state.lastSync.toLocaleTimeString([], {hour:"numeric",minute:"2-digit",second:"2-digit"})}`:"Not synced yet"}</div>
+        <div class="sync-text">${state.syncing?"Syncing with Google Sheet…":state.lastSync?`Last synced ${state.lastSync.toLocaleTimeString([], {hour:"numeric",minute:"2-digit",second:"2-digit"})}`:"Connecting to Google Sheet…"}</div>
       </div>
       ${overdue?`<div class="overdue-banner">⚠ ${overdue} task${overdue===1?"":"s"} outstanding</div>`:""}
       ${state.error?`<div class="error-banner">⚠ ${esc(state.error)}</div>`:""}
@@ -214,26 +287,26 @@
     </div>`;
   }
 
-  function unlockBox(){return `<div class="unlock-box"><div class="unlock-title">Unlock editing</div><div class="unlock-copy">Enter the admin PIN to add, edit or remove tasks, people and vendors. Marking tasks complete does not require the PIN.</div><form id="unlockForm"><div class="field"><label>Admin PIN</label><input id="pinInput" type="password" inputmode="numeric" autocomplete="current-password" required></div><button class="primary-btn" type="submit">Unlock</button></form></div>`;}
+  function unlockBox(){return `<div class="unlock-box"><div class="unlock-title">Unlock editing</div><div class="unlock-copy">Enter the admin PIN to add, edit or remove tasks, people and vendors. Marking tasks complete does not require the PIN.</div><form id="unlockForm"><div class="field"><label>Admin PIN</label><input id="pinInput" type="password" inputmode="numeric" autocomplete="current-password" value="${esc(state.pin)}" required ${state.unlocking?"disabled":""}></div><button class="primary-btn" type="submit" ${state.unlocking?"disabled":""}>${state.unlocking?"Checking PIN…":"Unlock"}</button></form></div>`;}
 
   function modalHtml(){
     const m=state.modal; if(!m)return '';
     if(m.type==='unlock')return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">Edit mode</div><button class="close-btn" data-close>×</button></div>${unlockBox()}</div></div>`;
     if(m.type==='task'){
       const t=m.item||{id:'',time:'09:00',title:'',peopleIds:[],notes:'',sortOrder:(sortedTasks().length+1)*10};
-      return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${t.id?'Edit task':'Add task'}</div><button class="close-btn" data-close>×</button></div><form id="taskForm"><input type="hidden" name="id" value="${esc(t.id)}"><div class="field"><label>Time</label><input name="time" type="time" value="${esc(t.time)}" required></div><div class="field"><label>Task</label><input name="title" value="${esc(t.title)}" required></div><div class="field"><label>Assigned people</label><div class="multi-select">${state.data.people.map(p=>`<button type="button" class="select-chip ${(t.peopleIds||[]).includes(p.id)?'selected':''}" data-select-person="${esc(p.id)}">${esc(p.name)}</button>`).join('')}</div><input type="hidden" name="peopleIds" value="${esc((t.peopleIds||[]).join(','))}"></div><div class="field"><label>Notes</label><textarea name="notes">${esc(t.notes||'')}</textarea></div><div class="field"><label>Sort order</label><input name="sortOrder" type="number" value="${Number(t.sortOrder)||0}"><div class="hint">Usually leave this alone. Lower numbers appear first when times match.</div></div><div class="modal-actions">${t.id?`<button type="button" class="danger-btn" data-delete-task="${esc(t.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit">Save task</button></div></form></div></div>`;
+      return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${m.isNew?'Add task':'Edit task'}</div><button class="close-btn" data-close>×</button></div><form id="taskForm"><input type="hidden" name="id" value="${esc(t.id)}"><div class="field"><label>Time</label><input name="time" type="time" value="${esc(t.time)}" required></div><div class="field"><label>Task</label><input name="title" value="${esc(t.title)}" required></div><div class="field"><label>Assigned people</label><div class="multi-select">${state.data.people.map(p=>`<button type="button" class="select-chip ${(t.peopleIds||[]).includes(p.id)?'selected':''}" data-select-person="${esc(p.id)}">${esc(p.name)}</button>`).join('')}</div><input type="hidden" name="peopleIds" value="${esc((t.peopleIds||[]).join(','))}"></div><div class="field"><label>Notes</label><textarea name="notes">${esc(t.notes||'')}</textarea></div><div class="field"><label>Sort order</label><input name="sortOrder" type="number" value="${Number(t.sortOrder)||0}"><div class="hint">Usually leave this alone. Lower numbers appear first when times match.</div></div><div class="modal-actions">${!m.isNew?`<button type="button" class="danger-btn" data-delete-task="${esc(t.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit" ${state.saving?"disabled":""}>${state.saving?"Saving…":"Save task"}</button></div></form></div></div>`;
     }
     if(m.type==='person'){
-      const p=m.item||{id:'',name:'',role:''}; return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${p.id?'Edit person':'Add person'}</div><button class="close-btn" data-close>×</button></div><form id="personForm"><input type="hidden" name="id" value="${esc(p.id)}"><div class="field"><label>Name</label><input name="name" value="${esc(p.name)}" required></div><div class="field"><label>Role</label><input name="role" value="${esc(p.role||'')}" placeholder="Bride, Groom, Maid of Honour…"></div><div class="modal-actions">${p.id?`<button type="button" class="danger-btn" data-delete-person="${esc(p.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit">Save person</button></div></form></div></div>`;
+      const p=m.item||{id:'',name:'',role:''}; return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${m.isNew?'Add person':'Edit person'}</div><button class="close-btn" data-close>×</button></div><form id="personForm"><input type="hidden" name="id" value="${esc(p.id)}"><div class="field"><label>Name</label><input name="name" value="${esc(p.name)}" required></div><div class="field"><label>Role</label><input name="role" value="${esc(p.role||'')}" placeholder="Bride, Groom, Maid of Honour…"></div><div class="modal-actions">${!m.isNew?`<button type="button" class="danger-btn" data-delete-person="${esc(p.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit" ${state.saving?"disabled":""}>${state.saving?"Saving…":"Save person"}</button></div></form></div></div>`;
     }
     if(m.type==='vendor'){
-      const v=m.item||{id:'',role:'',name:'',phone:'',email:'',notes:''}; return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${v.id?'Edit vendor':'Add vendor'}</div><button class="close-btn" data-close>×</button></div><form id="vendorForm"><input type="hidden" name="id" value="${esc(v.id)}"><div class="field"><label>Role</label><input name="role" value="${esc(v.role)}" required placeholder="Photographer"></div><div class="field"><label>Name</label><input name="name" value="${esc(v.name)}" required></div><div class="field"><label>Phone</label><input name="phone" value="${esc(v.phone||'')}" type="tel"></div><div class="field"><label>Email</label><input name="email" value="${esc(v.email||'')}" type="email"></div><div class="field"><label>Notes</label><textarea name="notes">${esc(v.notes||'')}</textarea></div><div class="modal-actions">${v.id?`<button type="button" class="danger-btn" data-delete-vendor="${esc(v.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit">Save vendor</button></div></form></div></div>`;
+      const v=m.item||{id:'',role:'',name:'',phone:'',email:'',notes:''}; return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${m.isNew?'Add vendor':'Edit vendor'}</div><button class="close-btn" data-close>×</button></div><form id="vendorForm"><input type="hidden" name="id" value="${esc(v.id)}"><div class="field"><label>Role</label><input name="role" value="${esc(v.role)}" required placeholder="Photographer"></div><div class="field"><label>Name</label><input name="name" value="${esc(v.name)}" required></div><div class="field"><label>Phone</label><input name="phone" value="${esc(v.phone||'')}" type="tel"></div><div class="field"><label>Email</label><input name="email" value="${esc(v.email||'')}" type="email"></div><div class="field"><label>Notes</label><textarea name="notes">${esc(v.notes||'')}</textarea></div><div class="modal-actions">${!m.isNew?`<button type="button" class="danger-btn" data-delete-vendor="${esc(v.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit" ${state.saving?"disabled":""}>${state.saving?"Saving…":"Save vendor"}</button></div></form></div></div>`;
     }
     return '';
   }
 
   function render(){
-    if(state.loading){app.innerHTML=`<div class="shell"><div class="loading"><div class="spinner"></div>Loading wedding runsheet…</div></div>`;return;}
+    if(state.loading){app.innerHTML=`<div class="shell"><div class="header"><div class="eyebrow">Live Runsheet</div><div class="title">${esc(cfg.EVENT_TITLE||"The Wedding Day")}</div><div class="sample-note">${esc(cfg.EVENT_LABEL||"")}</div></div><div class="loading"><div class="spinner"></div><b>Connecting to the live schedule…</b><div class="loading-sub">First visits can take a few seconds. After this, the last synced runsheet opens instantly while Google refreshes in the background.</div></div></div>`;return;}
     const panel=state.tab==='runsheet'?renderRunsheet():state.tab==='people'?renderPeople():state.tab==='vendors'?renderVendors():renderAdmin();
     app.innerHTML=`<div class="shell">${renderHeader()}${renderTabs()}${panel}</div>${modalHtml()}`;
     bindEvents();
@@ -248,9 +321,9 @@
     app.querySelector('[data-action="admin"]')?.addEventListener('click',()=>{if(state.adminUnlocked){state.tab='admin';render();}else{state.modal={type:'unlock'};render();}});
     app.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>{state.modal=null;render();});
     app.querySelector('[data-lock]')?.addEventListener('click',()=>{lockAdmin();state.tab='runsheet';render();});
-    app.querySelector('[data-new-task]')?.addEventListener('click',()=>{state.modal={type:'task',item:null};render();});
-    app.querySelector('[data-new-person]')?.addEventListener('click',()=>{state.modal={type:'person',item:null};render();});
-    app.querySelector('[data-new-vendor]')?.addEventListener('click',()=>{state.modal={type:'vendor',item:null};render();});
+    app.querySelector('[data-new-task]')?.addEventListener('click',()=>{const max=Math.max(0,...state.data.tasks.map(t=>Number(t.sortOrder)||0));state.modal={type:'task',isNew:true,item:{id:clientId('t'),time:'09:00',title:'',peopleIds:[],notes:'',sortOrder:max+10}};render();});
+    app.querySelector('[data-new-person]')?.addEventListener('click',()=>{state.modal={type:'person',isNew:true,item:{id:clientId('p'),name:'',role:''}};render();});
+    app.querySelector('[data-new-vendor]')?.addEventListener('click',()=>{state.modal={type:'vendor',isNew:true,item:{id:clientId('v'),role:'',name:'',phone:'',email:'',notes:''}};render();});
     app.querySelectorAll('[data-edit-task]').forEach(b=>b.onclick=()=>{state.modal={type:'task',item:state.data.tasks.find(x=>x.id===b.dataset.editTask)};render();});
     app.querySelectorAll('[data-edit-person]').forEach(b=>b.onclick=()=>{state.modal={type:'person',item:state.data.people.find(x=>x.id===b.dataset.editPerson)};render();});
     app.querySelectorAll('[data-edit-vendor]').forEach(b=>b.onclick=()=>{state.modal={type:'vendor',item:state.data.vendors.find(x=>x.id===b.dataset.editVendor)};render();});
@@ -267,5 +340,7 @@
 
   setInterval(()=>{const el=document.getElementById('liveClock');if(el)el.textContent=fmtClock(new Date());checkNotifications();},1000);
   setInterval(()=>{ if (!state.modal && !state.saving) loadData(true); }, Math.max(5000, Number(cfg.POLL_MS)||10000));
-  loadData();
+  const hasCache = readCache();
+  if (hasCache) render();
+  loadData(hasCache);
 })();
