@@ -259,16 +259,29 @@
     return `<div class="tabs">${tabs.map(([id,ic,l])=>`<button class="tab ${state.tab===id?'active':''}" data-tab="${id}">${ic} ${l}</button>`).join('')}</div>`;
   }
 
-  function taskCard(t){
+  function taskCard(t, compact=false){
     const s=status(t), pm=personMap(), names=(t.peopleIds||[]).map(id=>pm[id]?.name).filter(Boolean).join(', ');
     const celebration = state.celebratingTaskId === t.id ? " just-completed" : "";
-    return `<div class="item ${s}${celebration}"><div class="marker"><span class="dot">${s==='complete'?'✓':''}</span></div><div class="card"><div class="item-time">${fmtTime(t.time)}</div><div class="item-title">${esc(t.title)}</div>${names?`<div class="item-who">${esc(names)}</div>`:''}${t.notes?`<div class="item-notes">${esc(t.notes)}</div>`:''}${s==='overdue'?`<div class="status">⚠ Outstanding</div>`:''}<div><button class="check-btn" data-toggle="${esc(t.id)}">${t.done?'Mark not done':'Mark done'}</button></div><span class="card-ornament"></span></div></div>`;
+    return `<div class="item ${s}${celebration}${compact?' compact-complete':''}"><div class="marker"><span class="dot">${s==='complete'?'✓':''}</span></div><div class="card"><div class="item-time">${fmtTime(t.time)}</div><div class="item-title">${esc(t.title)}</div>${names?`<div class="item-who">${esc(names)}</div>`:''}${t.notes&&!compact?`<div class="item-notes">${esc(t.notes)}</div>`:''}${s==='overdue'?`<div class="status">⚠ Outstanding</div>`:''}<div><button class="check-btn" data-toggle="${esc(t.id)}">${t.done?'Mark not done':'Mark done'}</button></div><span class="card-ornament"></span></div></div>`;
   }
 
-  function renderRunsheet(){ const tasks=sortedTasks(); return `<div class="panel">${tasks.length?`<div class="timeline">${tasks.map(taskCard).join('')}</div>`:`<div class="empty">No tasks have been added yet.</div>`}</div>`; }
+  function renderRunsheet(){
+    const tasks=sortedTasks();
+    if(!tasks.length) return `<div class="panel"><div class="empty">No tasks have been added yet.</div></div>`;
+    const live=tasks.filter(t=>!t.done), completed=tasks.filter(t=>t.done);
+    return `<div class="panel">
+      ${live.length?`<div class="timeline live-timeline">${live.map(taskCard).join('')}</div>`:`<div class="all-done-note">All scheduled tasks are complete ✓</div>`}
+      ${completed.length?`<section class="completed-section"><div class="completed-head"><span>Completed</span><span>${completed.length}</span></div><div class="completed-rail">${completed.map(t=>taskCard(t,true)).join('')}</div></section>`:''}
+    </div>`;
+  }
   function renderPeople(){
     const p=state.data.people, selected=state.selectedPerson, tasks=selected?sortedTasks().filter(t=>(t.peopleIds||[]).includes(selected)):[];
-    return `<div class="panel"><div class="pills">${p.map(x=>`<button class="pill ${selected===x.id?'active':''}" data-person="${esc(x.id)}">${esc(x.name)} <span class="pill-role">${esc(x.role||'')}</span></button>`).join('')}</div>${!selected?`<div class="empty">Tap a name to see that person's tasks<br>and what time they need to happen.</div>`:tasks.length?`<div class="timeline">${tasks.map(taskCard).join('')}</div>`:`<div class="empty">No tasks assigned yet.</div>`}</div>`;
+    let taskMarkup='';
+    if(selected && tasks.length){
+      const live=tasks.filter(t=>!t.done), completed=tasks.filter(t=>t.done);
+      taskMarkup=`${live.length?`<div class="timeline live-timeline">${live.map(taskCard).join('')}</div>`:`<div class="all-done-note">All your scheduled tasks are complete ✓</div>`}${completed.length?`<section class="completed-section"><div class="completed-head"><span>Completed</span><span>${completed.length}</span></div><div class="completed-rail">${completed.map(t=>taskCard(t,true)).join('')}</div></section>`:''}`;
+    }
+    return `<div class="panel"><div class="pills">${p.map(x=>`<button class="pill ${selected===x.id?'active':''}" data-person="${esc(x.id)}">${esc(x.name)} <span class="pill-role">${esc(x.role||'')}</span></button>`).join('')}</div>${!selected?`<div class="empty">Tap a name to see that person's tasks<br>and what time they need to happen.</div>`:tasks.length?taskMarkup:`<div class="empty">No tasks assigned yet.</div>`}</div>`;
   }
   function renderVendors(){
     return `<div class="panel">${state.data.vendors.length?state.data.vendors.map(v=>`<div class="vendor-card"><div class="vendor-role">${esc(v.role)}</div><div class="vendor-name">${esc(v.name)}</div><div class="vendor-actions">${v.phone?`<a class="vendor-link" href="tel:${esc(v.phone)}">☎ ${esc(v.phone)}</a>`:''}${v.email?`<a class="vendor-link" href="mailto:${esc(v.email)}">✉ ${esc(v.email)}</a>`:''}</div>${v.notes?`<div class="vendor-notes">${esc(v.notes)}</div>`:''}</div>`).join(''):`<div class="empty">No vendors have been added yet.</div>`}</div>`;
