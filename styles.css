@@ -405,3 +405,33 @@ button:disabled,input:disabled{opacity:.58;cursor:wait}.primary-btn:disabled{cur
   .live-timeline .item{animation:none!important}
   .completed-stack-card{transition:none!important}
 }
+
+/* === V3.4 full-day chronological timeline === */
+.day-overview-note{display:flex;align-items:flex-end;justify-content:space-between;gap:16px;margin:2px 2px 18px;padding:0 2px 12px;border-bottom:1px solid rgba(184,163,143,.28)}
+.day-overview-note span{font-family:"Cormorant Garamond",Georgia,serif;font-size:22px;font-weight:700;color:#4A403C}
+.day-overview-note small{font-size:11.5px;line-height:1.4;color:#928780;text-align:right;max-width:255px}
+.day-timeline{padding-bottom:10px}
+.day-timeline .live-wrap{position:relative;z-index:2}
+.completed-wrap{position:relative;z-index:1;margin:0 0 9px 34px;transition:margin .28s ease,transform .28s ease}
+.completed-wrap.stacked{margin-top:-18px}
+.completed-inline-card{width:100%;display:grid;grid-template-columns:22px 74px minmax(0,1fr) 24px;align-items:center;gap:8px;min-height:52px;padding:9px 11px;border:1px solid rgba(141,151,141,.28);border-radius:12px;background:linear-gradient(135deg,rgba(247,249,246,.97),rgba(242,245,241,.96));box-shadow:0 4px 11px rgba(95,112,93,.07);color:#566056;text-align:left;cursor:pointer;position:relative;overflow:hidden}
+.completed-inline-card::after{content:"";position:absolute;inset:0;border-top:1px solid rgba(255,255,255,.8);pointer-events:none}
+.completed-wrap.stacked .completed-inline-card{box-shadow:0 6px 13px rgba(95,112,93,.09)}
+.completed-inline-card:hover,.completed-inline-card:focus-visible{transform:translateY(-2px);z-index:10;box-shadow:0 9px 19px rgba(95,112,93,.14);outline:none}
+.completed-inline-card:focus-visible{box-shadow:0 0 0 2px #B8A38F,0 9px 19px rgba(95,112,93,.14)}
+.stack-check{display:grid;place-items:center;width:20px;height:20px;border-radius:50%;background:#8D978D;color:white;font-size:12px;font-weight:800}
+.stack-time{font-size:11px;font-weight:800;letter-spacing:.04em;color:#7A837A;font-variant-numeric:tabular-nums;white-space:nowrap}
+.stack-main{min-width:0;display:flex;align-items:baseline;gap:8px;flex-wrap:wrap}
+.stack-title{font-family:"Manrope",-apple-system,BlinkMacSystemFont,"Segoe UI",sans-serif;font-size:13px;font-weight:800;color:#596159;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.stack-who{font-size:10.5px;font-weight:600;color:#919991;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;max-width:100%}
+.stack-back{font-size:15px;color:#8D978D;opacity:.85;text-align:right}
+/* Upcoming cards remain fully visible; completed cards no longer leave the timeline. */
+.day-timeline .item{margin-bottom:0}
+.day-timeline .live-wrap + .completed-wrap,.day-timeline .completed-wrap + .live-wrap{margin-top:2px}
+@media(max-width:520px){
+  .day-overview-note{display:block}.day-overview-note small{display:block;text-align:left;margin-top:3px;max-width:none}
+  .completed-wrap{margin-left:27px}.completed-wrap.stacked{margin-top:-16px}
+  .completed-inline-card{grid-template-columns:20px 64px minmax(0,1fr) 20px;padding:8px 9px;min-height:49px}
+  .stack-main{display:block}.stack-title,.stack-who{display:block}.stack-who{margin-top:2px}
+}
+@media(prefers-reduced-motion:reduce){.completed-wrap,.completed-inline-card{transition:none!important}}

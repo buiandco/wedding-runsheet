@@ -273,34 +273,35 @@
     const s=status(t), pm=personMap(), names=(t.peopleIds||[]).map(id=>pm[id]?.name).filter(Boolean).join(', ');
     const celebration = state.celebratingTaskId === t.id ? " just-completed" : "";
     if(compact){
-      return `<button class="completed-stack-card" style="--stack:${Math.min(stackIndex,6)}" data-restore="${esc(t.id)}" title="Tap to move this task back to the live runsheet"><span class="stack-check">✓</span><span class="stack-time">${fmtTime(t.time)}</span><span class="stack-title">${esc(t.title)}</span><span class="stack-back">↶</span></button>`;
+      return `<button class="completed-inline-card" data-restore="${esc(t.id)}" title="Completed — tap to restore"><span class="stack-check">✓</span><span class="stack-time">${fmtTime(t.time)}</span><span class="stack-main"><span class="stack-title">${esc(t.title)}</span>${names?`<span class="stack-who">${esc(names)}</span>`:''}</span><span class="stack-back">↶</span></button>`;
     }
     return `<div class="item ${s}${celebration}"><div class="marker"><span class="dot">${s==='complete'?'✓':''}</span></div><div class="card"><div class="item-time">${fmtTime(t.time)}</div><div class="item-title">${esc(t.title)}</div>${names?`<div class="item-who">${esc(names)}</div>`:''}${t.notes?`<div class="item-notes">${esc(t.notes)}</div>`:''}${s==='overdue'?`<div class="status">⚠ Outstanding</div>`:''}<div><button class="check-btn" data-toggle="${esc(t.id)}">Mark done</button></div><span class="card-ornament"></span></div></div>`;
   }
 
-  function completedStack(completed){
-    if(!completed.length) return '';
-    const newest=[...completed].reverse();
-    return `<section class="completed-section"><div class="completed-head"><span>Completed · tap a card to restore</span><span>${completed.length}</span></div><div class="completed-stack">${newest.map((t,i)=>taskCard(t,true,i)).join('')}</div></section>`;
+  function dayTimeline(tasks){
+    // Preserve chronological context for the whole day. Completed tasks collapse
+    // in-place, while unfinished/upcoming tasks remain full cards. Consecutive
+    // completed tasks overlap slightly to form a readable stack.
+    let previousDone=false;
+    return `<div class="timeline day-timeline">${tasks.map(t=>{
+      if(t.done){
+        const cls=previousDone?' completed-wrap stacked':' completed-wrap';
+        previousDone=true;
+        return `<div class="${cls}">${taskCard(t,true)}</div>`;
+      }
+      previousDone=false;
+      return `<div class="live-wrap">${taskCard(t)}</div>`;
+    }).join('')}</div>`;
   }
 
   function renderRunsheet(){
     const tasks=sortedTasks();
     if(!tasks.length) return `<div class="panel"><div class="empty">No tasks have been added yet.</div></div>`;
-    const live=tasks.filter(t=>!t.done), completed=tasks.filter(t=>t.done);
-    return `<div class="panel">
-      ${live.length?`<div class="timeline live-timeline">${live.map(taskCard).join('')}</div>`:`<div class="all-done-note">All scheduled tasks are complete ✓</div>`}
-      ${completedStack(completed)}
-    </div>`;
+    return `<div class="panel"><div class="day-overview-note"><span>Full day schedule</span><small>Completed tasks collapse but stay in their original time position. Tap one to restore it.</small></div>${dayTimeline(tasks)}</div>`;
   }
   function renderPeople(){
     const p=state.data.people, selected=state.selectedPerson, tasks=selected?sortedTasks().filter(t=>(t.peopleIds||[]).includes(selected)):[];
-    let taskMarkup='';
-    if(selected && tasks.length){
-      const live=tasks.filter(t=>!t.done), completed=tasks.filter(t=>t.done);
-      taskMarkup=`${live.length?`<div class="timeline live-timeline">${live.map(taskCard).join('')}</div>`:`<div class="all-done-note">All your scheduled tasks are complete ✓</div>`}${completedStack(completed)}`;
-    }
-    return `<div class="panel"><div class="pills">${p.map(x=>`<button class="pill ${selected===x.id?'active':''}" data-person="${esc(x.id)}">${esc(x.name)} <span class="pill-role">${esc(x.role||'')}</span></button>`).join('')}</div>${!selected?`<div class="empty">Tap a name to see that person's tasks<br>and what time they need to happen.</div>`:tasks.length?taskMarkup:`<div class="empty">No tasks assigned yet.</div>`}</div>`;
+    return `<div class="panel"><div class="pills">${p.map(x=>`<button class="pill ${selected===x.id?'active':''}" data-person="${esc(x.id)}">${esc(x.name)} <span class="pill-role">${esc(x.role||'')}</span></button>`).join('')}</div>${!selected?`<div class="empty">Tap a name to see that person's tasks<br>and what time they need to happen.</div>`:tasks.length?`<div class="day-overview-note"><span>${esc(personMap()[selected]?.name||'My')} · full day</span><small>Completed tasks stay visible in the schedule.</small></div>${dayTimeline(tasks)}`:`<div class="empty">No tasks assigned yet.</div>`}</div>`;
   }
   function renderVendors(){
     return `<div class="panel">${state.data.vendors.length?state.data.vendors.map(v=>`<div class="vendor-card"><div class="vendor-role">${esc(v.role)}</div><div class="vendor-name">${esc(v.name)}</div><div class="vendor-actions">${v.phone?`<a class="vendor-link" href="tel:${esc(v.phone)}">☎ ${esc(v.phone)}</a>`:''}${v.email?`<a class="vendor-link" href="mailto:${esc(v.email)}">✉ ${esc(v.email)}</a>`:''}</div>${v.notes?`<div class="vendor-notes">${esc(v.notes)}</div>`:''}</div>`).join(''):`<div class="empty">No vendors have been added yet.</div>`}</div>`;
