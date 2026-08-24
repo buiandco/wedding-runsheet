@@ -1,16 +1,4 @@
 
-function personInitials(person){
-  const name=String((person&&person.name)||'').trim();
-  if(!name)return '?';
-  return name.split(/\s+/).slice(0,2).map(x=>x.charAt(0).toUpperCase()).join('');
-}
-function personAvatar(person, sizeClass=''){
-  if(!person)return '';
-  const src=String(person.imageUrl||'').trim();
-  const fallback=personInitials(person);
-  return `<span class="person-avatar ${sizeClass}">${src?`<img src="${esc(src)}" alt="" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">`:''}<span class="person-avatar-fallback"${src?' style="display:none"':''}>${esc(fallback)}</span></span>`;
-}
-
 (() => {
   "use strict";
 
@@ -86,6 +74,24 @@ function personAvatar(person, sizeClass=''){
   function clientId(prefix) { const r=(globalThis.crypto && crypto.randomUUID)?crypto.randomUUID().replace(/-/g,"").slice(0,12):Date.now().toString(36)+Math.random().toString(36).slice(2,7); return prefix+r; }
   function esc(v="") { return String(v).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
   function fmtTime(hhmm) { const [h,m] = (hhmm || "00:00").split(":").map(Number); const p=h>=12?"PM":"AM"; const h12=h%12===0?12:h%12; return `${h12}:${String(m).padStart(2,"0")} ${p}`; }
+  function personInitials(person){
+    const name=String(person?.name||'').trim();
+    if(!name)return '?';
+    return name.split(/\s+/).slice(0,2).map(x=>x.charAt(0).toUpperCase()).join('');
+  }
+  function resolveImageUrl(src){
+    src=String(src||'').trim();
+    if(!src)return '';
+    // Absolute URLs remain untouched. Relative paths resolve against GitHub Pages.
+    try{return new URL(src, window.location.href).href;}catch(e){return src;}
+  }
+  function personAvatar(person,sizeClass=''){
+    if(!person)return '';
+    const src=resolveImageUrl(person.imageUrl);
+    const initials=personInitials(person);
+    return `<span class="person-avatar ${sizeClass}" title="${esc(person.name||'')}">${src?`<img src="${esc(src)}" alt="${esc(person.name||'')}" loading="lazy" onerror="this.style.display='none';this.nextElementSibling.style.display='grid'">`:''}<span class="person-avatar-fallback"${src?' style="display:none"':''}>${esc(initials)}</span></span>`;
+  }
+  function personInline(person){return person?`${personAvatar(person,'small')}<span>${esc(person.name)}</span>`:'';}
   function fmtClock(d) { return d.toLocaleTimeString("en-AU", {hour:"numeric", minute:"2-digit", second:"2-digit", hour12:true}); }
   function compactEventLabel(value) {
     const raw = String(value || "").trim();
@@ -320,6 +326,78 @@ function personAvatar(person, sizeClass=''){
     return {now:overdue[0]||null,next:upcoming[0]||null};
   }
 
+
+  /* V3.15 — calendar export, inside app scope */
+  function icsEscape(v){return String(v==null?'':v).replace(/\\/g,'\\\\').replace(/\r?\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;');}
+  function icsStamp(d){const z=n=>String(n).padStart(2,'0');return d.getUTCFullYear()+z(d.getUTCMonth()+1)+z(d.getUTCDate())+'T'+z(d.getUTCHours())+z(d.getUTCMinutes())+z(d.getUTCSeconds())+'Z';}
+  function calendarEffectiveDate(){
+    const st=state.data.settings||{},tz=String(st.timezone||'Australia/Sydney');
+    const test=String(st.reminderTestMode||'FALSE').toUpperCase()==='TRUE';
+    if(test && String(st.reminderTestDate||'').match(/^\d{4}-\d{2}-\d{2}/)) return String(st.reminderTestDate).slice(0,10);
+    if(test){
+      const parts=new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
+      const get=k=>parts.find(p=>p.type===k)?.value||''; return `${get('year')}-${get('month')}-${get('day')}`;
+    }
+    return String(st.eventDate||'2026-09-26').slice(0,10);
+  }
+  function zonedLocalToUtc(dateStr,timeStr,timeZone){
+    const [Y,M,D]=dateStr.split('-').map(Number),[h,m]=String(timeStr||'00:00').split(':').map(Number);
+    let guess=Date.UTC(Y,M-1,D,h,m,0);
+    // Iterate offset using Intl so DST and Australia/Sydney are handled correctly.
+    for(let n=0;n<3;n++){
+      const parts=new Intl.DateTimeFormat('en-CA',{timeZone,year:'numeric',month:'2-digit',day:'2-digit',hour:'2-digit',minute:'2-digit',hourCycle:'h23'}).formatToParts(new Date(guess));
+      const get=k=>Number(parts.find(p=>p.type===k)?.value||0);
+      const rendered=Date.UTC(get('year'),get('month')-1,get('day'),get('hour'),get('minute'));
+      const wanted=Date.UTC(Y,M-1,D,h,m); guess += wanted-rendered;
+    }
+    return new Date(guess);
+  }
+  function buildWeddingIcs(personId,includeAlerts){
+    const st=state.data.settings||{},tz=String(st.timezone||'Australia/Sydney'),date=calendarEffectiveDate();
+    const person=personId==='all'?null:state.data.people.find(p=>p.id===personId);
+    const tasks=state.data.tasks.filter(t=>personId==='all'||(t.peopleIds||[]).includes(personId)).slice().sort((a,b)=>String(a.time).localeCompare(String(b.time)));
+    const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//JC Wedding Runsheet//EN','CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:'+icsEscape(person?`Jennifer & Charlie - ${person.name}`:'Jennifer & Charlie - Wedding Day')];
+    tasks.forEach(t=>{
+      const start=zonedLocalToUtc(date,t.time,tz),end=new Date(start.getTime()+30*60000);
+      const assigned=(t.peopleIds||[]).map(id=>personMap()[id]).filter(Boolean).map(p=>p.name);
+      const desc=[t.notes||'',assigned.length?'Assigned: '+assigned.join(', '):''].filter(Boolean).join('\n');
+      lines.push('BEGIN:VEVENT','UID:'+icsEscape(`jc-${date}-${t.id}@wedding-runsheet`),'DTSTAMP:'+icsStamp(new Date()),'DTSTART:'+icsStamp(start),'DTEND:'+icsStamp(end),'SUMMARY:'+icsEscape(t.title||'Wedding task'));
+      if(desc)lines.push('DESCRIPTION:'+icsEscape(desc));
+      if(includeAlerts){
+        [...new Set((t.reminderMinutes||[]).map(Number).filter(n=>Number.isFinite(n)&&n>=0))].forEach(n=>{
+          lines.push('BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:'+icsEscape(t.title||'Wedding task'),n===0?'TRIGGER:PT0M':'TRIGGER:-PT'+Math.round(n)+'M','END:VALARM');
+        });
+      }
+      lines.push('END:VEVENT');
+    });
+    lines.push('END:VCALENDAR');
+    return {text:lines.join('\r\n')+'\r\n',count:tasks.length,date,testMode:String(st.reminderTestMode||'FALSE').toUpperCase()==='TRUE',person};
+  }
+  async function deliverWeddingCalendar(personId,includeAlerts){
+    const built=buildWeddingIcs(personId,includeAlerts);
+    if(!built.count){alert('No runsheet tasks are assigned to this selection.');return;}
+    const who=personId==='all'?'everyone':(built.person?.name||'wedding');
+    const filename=('JC-Wedding-'+who).replace(/[^a-z0-9_-]+/gi,'-')+'.ics';
+    const file=new File([built.text],filename,{type:'text/calendar;charset=utf-8'});
+    // iPhone/iPad: native share sheet is much more reliable than synthetic downloads.
+    if(navigator.share && navigator.canShare && navigator.canShare({files:[file]})){
+      try{await navigator.share({files:[file],title:'Jennifer & Charlie Wedding Schedule'});return;}catch(e){if(e?.name==='AbortError')return;}
+    }
+    const url=URL.createObjectURL(file);
+    const a=document.createElement('a');a.href=url;a.download=filename;a.textContent='Open calendar file';a.style.display='none';document.body.appendChild(a);a.click();a.remove();
+    setTimeout(()=>URL.revokeObjectURL(url),10000);
+  }
+  function openCalendarModal(){
+    document.getElementById('calendarModal')?.remove();
+    const people=state.data.people.slice().sort((a,b)=>a.name.localeCompare(b.name)),m=document.createElement('div');m.id='calendarModal';m.className='calendar-modal-backdrop';
+    const test=String(state.data.settings?.reminderTestMode||'FALSE').toUpperCase()==='TRUE',effective=calendarEffectiveDate();
+    m.innerHTML=`<div class="calendar-modal" role="dialog" aria-modal="true"><button class="calendar-close" aria-label="Close">×</button><div class="calendar-kicker">${test?'TEST CALENDAR':'26 SEPT 26'}</div><h2>Add Wedding Schedule</h2><div class="${test?'calendar-test-banner':'calendar-live-banner'}">${test?'🧪 <strong>TEST MODE</strong><br>Events will use '+esc(effective)+'.':'💍 <strong>LIVE WEDDING DATE</strong><br>Events use 26 Sept 2026.'}</div><label class="calendar-label">Schedule for</label><select id="calendarPerson"><option value="all">Everyone — full wedding runsheet</option>${people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} — ${esc(p.role||'')}</option>`).join('')}</select><label class="calendar-check"><input id="calendarAlerts" type="checkbox" checked> Include runsheet reminder times as calendar alerts</label><div id="calendarSummary" class="calendar-summary"></div><button id="calendarDownload" class="calendar-primary">Create Calendar File</button><p class="calendar-note"><b>iPhone/iPad:</b> the Share sheet will open. Save/open the .ics file with Calendar.<br><b>Desktop:</b> an .ics file downloads for Apple Calendar or Google Calendar import.<br><br>This is a snapshot; Pushover remains the live reminder source.</p></div>`;
+    document.body.appendChild(m);
+    const sel=m.querySelector('#calendarPerson'),sum=m.querySelector('#calendarSummary');
+    const update=()=>{const id=sel.value,p=id==='all'?null:people.find(x=>x.id===id),ts=state.data.tasks.filter(t=>id==='all'||(t.peopleIds||[]).includes(id)),times=ts.map(t=>t.time).filter(Boolean).sort();sum.innerHTML=`${p?personAvatar(p):''}<span><strong>${ts.length} task${ts.length===1?'':'s'}</strong>${times.length?` · ${fmtTime(times[0])}–${fmtTime(times[times.length-1])}`:''}</span>`;};
+    sel.onchange=update;update();m.querySelector('.calendar-close').onclick=()=>m.remove();m.onclick=e=>{if(e.target===m)m.remove();};m.querySelector('#calendarDownload').onclick=async()=>{const b=m.querySelector('#calendarDownload');b.disabled=true;b.textContent='Preparing…';try{await deliverWeddingCalendar(sel.value,m.querySelector('#calendarAlerts').checked);}catch(e){alert('Could not create calendar: '+(e?.message||e));}finally{b.disabled=false;b.textContent='Create Calendar File';}};
+  }
+
   function renderHeader(){
     const now=new Date(), ctx=currentContext(now), overdue=state.data.tasks.filter(t=>status(t,now)==="overdue").length;
     const settings=state.data.settings||{}, label=compactEventLabel(settings.eventLabel||cfg.EVENT_LABEL||"");
@@ -358,12 +436,12 @@ function personAvatar(person, sizeClass=''){
   }
 
   function taskCard(t, compact=false, stackIndex=0){
-    const s=status(t), pm=personMap(), names=(t.peopleIds||[]).map(id=>pm[id]?.name).filter(Boolean).join(', ');
+    const s=status(t), pm=personMap(), assignedPeople=(t.peopleIds||[]).map(id=>pm[id]).filter(Boolean), names=assignedPeople.map(p=>p.name).join(', '), peopleHtml=assignedPeople.map(p=>`<span class="task-person">${personInline(p)}</span>`).join('');
     const celebration = state.celebratingTaskId === t.id ? " just-completed" : "";
     if(compact){
-      return `<button class="completed-inline-card" data-restore="${esc(t.id)}" title="Completed — tap to restore"><span class="stack-check">✓</span><span class="stack-time">${fmtTime(t.time)}</span><span class="stack-main"><span class="stack-title">${esc(t.title)}</span>${names?`<span class="stack-who">${esc(names)}</span>`:''}</span><span class="stack-back">↶</span></button>`;
+      return `<button class="completed-inline-card" data-restore="${esc(t.id)}" title="Completed — tap to restore"><span class="stack-check">✓</span><span class="stack-time">${fmtTime(t.time)}</span><span class="stack-main"><span class="stack-title">${esc(t.title)}</span>${names?`<span class="stack-who">${assignedPeople.slice(0,4).map(p=>personAvatar(p,'micro')).join('')}<span>${esc(names)}</span></span>`:''}</span><span class="stack-back">↶</span></button>`;
     }
-    return `<div class="item ${s}${celebration}"><div class="marker"><span class="dot">${s==='complete'?'✓':''}</span></div><div class="card"><div class="item-time">${fmtTime(t.time)}</div><div class="item-title">${esc(t.title)}</div>${names?`<div class="item-who">${esc(names)}</div>`:''}${t.notes?`<div class="item-notes">${esc(t.notes)}</div>`:''}${s==='overdue'?`<div class="status">⚠ Outstanding</div>`:''}<div><button class="check-btn" data-toggle="${esc(t.id)}">Mark done</button></div><span class="card-ornament"></span></div></div>`;
+    return `<div class="item ${s}${celebration}"><div class="marker"><span class="dot">${s==='complete'?'✓':''}</span></div><div class="card"><div class="item-time">${fmtTime(t.time)}</div><div class="item-title">${esc(t.title)}</div>${peopleHtml?`<div class="item-who people-with-faces">${peopleHtml}</div>`:''}${t.notes?`<div class="item-notes">${esc(t.notes)}</div>`:''}${s==='overdue'?`<div class="status">⚠ Outstanding</div>`:''}<div><button class="check-btn" data-toggle="${esc(t.id)}">Mark done</button></div><span class="card-ornament"></span></div></div>`;
   }
 
   function dayTimeline(tasks){
@@ -389,7 +467,7 @@ function personAvatar(person, sizeClass=''){
   }
   function renderPeople(){
     const p=state.data.people, selected=state.selectedPerson, tasks=selected?sortedTasks().filter(t=>(t.peopleIds||[]).includes(selected)):[];
-    return `<div class="panel"><div class="pills">${p.map(x=>`<button class="pill ${selected===x.id?'active':''}" data-person="${esc(x.id)}">${esc(x.name)} <span class="pill-role">${esc(x.role||'')}</span></button>`).join('')}</div>${!selected?`<div class="empty">Tap a name to see that person's tasks<br>and what time they need to happen.</div>`:tasks.length?`<div class="day-overview-note"><span>${esc(personMap()[selected]?.name||'My')} · full day</span><small>Completed tasks stay visible in the schedule.</small></div>${dayTimeline(tasks)}`:`<div class="empty">No tasks assigned yet.</div>`}</div>`;
+    return `<div class="panel"><div class="pills">${p.map(x=>`<button class="pill person-pill ${selected===x.id?'active':''}" data-person="${esc(x.id)}">${personAvatar(x)}<span class="person-pill-copy"><span>${esc(x.name)}</span><span class="pill-role">${esc(x.role||'')}</span></span></button>`).join('')}</div>${!selected?`<div class="empty">Tap a name to see that person's tasks<br>and what time they need to happen.</div>`:tasks.length?`<div class="day-overview-note"><span>${esc(personMap()[selected]?.name||'My')} · full day</span><small>Completed tasks stay visible in the schedule.</small></div>${dayTimeline(tasks)}`:`<div class="empty">No tasks assigned yet.</div>`}</div>`;
   }
   function renderVendors(){
     return `<div class="panel">${state.data.vendors.length?state.data.vendors.map(v=>`<div class="vendor-card"><div class="vendor-role">${esc(v.role)}</div><div class="vendor-name">${esc(v.name)}</div><div class="vendor-actions">${v.phone?`<a class="vendor-link" href="tel:${esc(v.phone)}">☎ ${esc(v.phone)}</a>`:''}${v.email?`<a class="vendor-link" href="mailto:${esc(v.email)}">✉ ${esc(v.email)}</a>`:''}</div>${v.notes?`<div class="vendor-notes">${esc(v.notes)}</div>`:''}</div>`).join(''):`<div class="empty">No vendors have been added yet.</div>`}</div>`;
@@ -400,8 +478,9 @@ function personAvatar(person, sizeClass=''){
     return items.map(x=>{
       const lead=type==='task'?fmtTime(x.time):(type==='vendor'?esc(x.role):esc(x.role||''));
       const title=type==='task'?x.title:x.name;
+      const avatar=type==='person'?personAvatar(x):'';
       const sub=type==='task'?((x.peopleIds||[]).map(id=>personMap()[id]?.name).filter(Boolean).join(', ')||'No people assigned'):(type==='vendor'?(x.phone||x.email||'No contact details'):`ID: ${x.id}`);
-      return `<div class="admin-row"><div class="admin-row-sub">${lead}</div><div class="admin-row-main"><div class="admin-row-title">${esc(title)}</div><div class="admin-row-sub">${esc(sub)}</div></div><div class="admin-row-actions"><button class="small-action" data-edit-${type}="${esc(x.id)}">Edit</button></div></div>`;
+      return `<div class="admin-row"><div class="admin-row-sub">${lead}</div><div class="admin-row-main">${avatar}<div class="admin-row-title">${esc(title)}</div><div class="admin-row-sub">${esc(sub)}</div></div><div class="admin-row-actions"><button class="small-action" data-edit-${type}="${esc(x.id)}">Edit</button></div></div>`;
     }).join('');
   }
 
@@ -443,7 +522,7 @@ function personAvatar(person, sizeClass=''){
     if(m.type==='person'){
       const p=m.item||{id:'',name:'',role:'',pushoverDevice:'',
       imageUrl: String(fd.get('imageUrl')||'').trim()}; return `<div class="modal-backdrop"><div class="modal"><div class="modal-head"><div class="modal-title">${m.isNew?'Add person':'Edit person'}</div><button class="close-btn" data-close>×</button></div><form id="personForm"><input type="hidden" name="id" value="${esc(p.id)}"><div class="field"><label>Name</label><input name="name" value="${esc(p.name)}" required></div><div class="field"><label>Role</label><input name="role" value="${esc(p.role||'')}" placeholder="Bride, Groom, Maid of Honour…"></div>
-      <div class="field"><label>Pushover device name</label><input name="pushoverDevice" value="${esc(p.pushoverDevice||'')}" autocomplete="off" placeholder="jennifer"><label>Photo URL / path</label><input name="imageUrl" value="${esc(person.imageUrl||'')}" placeholder="images/people/charlie.jpg"><div class="hint">Use the exact device name registered in the shared Pushover account, for example <b>jennifer</b>, <b>charlie</b> or <b>mc</b>. All devices share one Pushover account/User Key; this field chooses which phone receives this person's reminders.</div></div>
+      <div class="field"><label>Pushover device name</label><input name="pushoverDevice" value="${esc(p.pushoverDevice||'')}" autocomplete="off" placeholder="jennifer"><label>Photo URL / path</label><input name="imageUrl" value="${esc(p.imageUrl||'')}" placeholder="images/people/charlie.jpg"><div class="hint">Use the exact device name registered in the shared Pushover account, for example <b>jennifer</b>, <b>charlie</b> or <b>mc</b>. All devices share one Pushover account/User Key; this field chooses which phone receives this person's reminders.</div></div>
       <div class="modal-actions">${!m.isNew?`<button type="button" class="danger-btn" data-delete-person="${esc(p.id)}">Delete</button>`:''}<button type="button" class="ghost-btn" data-close>Cancel</button><button class="primary-btn" type="submit" ${state.saving?"disabled":""}>${state.saving?"Saving…":"Save person"}</button></div></form></div></div>`;
     }
     if(m.type==='vendor'){
@@ -472,7 +551,7 @@ function personAvatar(person, sizeClass=''){
     app.querySelector('[data-test-reminder]')?.addEventListener('click',async()=>{const sel=app.querySelector('#testReminderPerson');if(!sel)return;const personId=sel.value;try{state.saving=true;await api('sendTestReminder',{personId},true);state.modal=null;state.success='Test notification sent';render();setTimeout(()=>{if(state.success==='Test notification sent'){state.success='';render();}},2500);}catch(e){state.error=e.message;render();}finally{state.saving=false;}});
     app.querySelector('[data-lock]')?.addEventListener('click',()=>{lockAdmin();state.tab='runsheet';render();});
     app.querySelector('[data-new-task]')?.addEventListener('click',()=>{const max=Math.max(0,...state.data.tasks.map(t=>Number(t.sortOrder)||0));state.modal={type:'task',isNew:true,item:{id:clientId('t'),time:'09:00',title:'',peopleIds:[],notes:'',sortOrder:max+10,reminderMinutes:[],reminderPriority:'normal'}};render();});
-    app.querySelector('[data-new-person]')?.addEventListener('click',()=>{state.modal={type:'person',isNew:true,item:{id:clientId('p'),name:'',role:'',pushoverDevice:''}};render();});
+    app.querySelector('[data-new-person]')?.addEventListener('click',()=>{state.modal={type:'person',isNew:true,item:{id:clientId('p'),name:'',role:'',pushoverDevice:'',imageUrl:''}};render();});
     app.querySelector('[data-new-vendor]')?.addEventListener('click',()=>{state.modal={type:'vendor',isNew:true,item:{id:clientId('v'),role:'',name:'',phone:'',email:'',notes:''}};render();});
     app.querySelectorAll('[data-edit-task]').forEach(b=>b.onclick=()=>{state.modal={type:'task',item:state.data.tasks.find(x=>x.id===b.dataset.editTask)};render();});
     app.querySelectorAll('[data-edit-person]').forEach(b=>b.onclick=()=>{state.modal={type:'person',item:state.data.people.find(x=>x.id===b.dataset.editPerson)};render();});
@@ -481,7 +560,7 @@ function personAvatar(person, sizeClass=''){
     const unlockForm=app.querySelector('#unlockForm'); if(unlockForm)unlockForm.onsubmit=e=>{e.preventDefault();unlock(app.querySelector('#pinInput').value);};
     app.querySelectorAll('[data-select-person]').forEach(b=>b.onclick=()=>{b.classList.toggle('selected');const ids=[...app.querySelectorAll('[data-select-person].selected')].map(x=>x.dataset.selectPerson);app.querySelector('input[name="peopleIds"]').value=ids.join(',');});
     const tf=app.querySelector('#taskForm'); if(tf)tf.onsubmit=e=>{e.preventDefault();const f=new FormData(tf);saveAction('saveTask',{id:f.get('id')||'',time:f.get('time'),title:f.get('title'),peopleIds:String(f.get('peopleIds')||'').split(',').filter(Boolean),notes:f.get('notes')||'',sortOrder:Number(f.get('sortOrder')||0),reminderMinutes:String(f.get('reminderMinutes')||'').split(',').map(x=>Number(x.trim())).filter(x=>Number.isFinite(x)&&x>=0),reminderPriority:f.get('reminderPriority')||'normal'},true,'Task saved');};
-    const pf=app.querySelector('#personForm'); if(pf)pf.onsubmit=e=>{e.preventDefault();const f=new FormData(pf);saveAction('savePerson',{id:f.get('id')||'',name:f.get('name'),role:f.get('role')||'',pushoverDevice:f.get('pushoverDevice')||''},true,'Person saved');};
+    const pf=app.querySelector('#personForm'); if(pf)pf.onsubmit=e=>{e.preventDefault();const f=new FormData(pf);saveAction('savePerson',{id:f.get('id')||'',name:f.get('name'),role:f.get('role')||'',pushoverDevice:f.get('pushoverDevice')||'',imageUrl:String(f.get('imageUrl')||'').trim()},true,'Person saved');};
     const vf=app.querySelector('#vendorForm'); if(vf)vf.onsubmit=e=>{e.preventDefault();const f=new FormData(vf);saveAction('saveVendor',{id:f.get('id')||'',role:f.get('role'),name:f.get('name'),phone:f.get('phone')||'',email:f.get('email')||'',notes:f.get('notes')||''},true,'Vendor saved');};
     app.querySelector('[data-delete-task]')?.addEventListener('click',e=>{if(confirm('Delete this task?'))saveAction('deleteTask',{id:e.currentTarget.dataset.deleteTask},true,'Task deleted');});
     app.querySelector('[data-delete-person]')?.addEventListener('click',e=>{if(confirm('Delete this person? They will also be removed from assigned tasks.'))saveAction('deletePerson',{id:e.currentTarget.dataset.deletePerson},true,'Person deleted');});
@@ -494,61 +573,3 @@ function personAvatar(person, sizeClass=''){
   if (hasCache) render();
   loadData(hasCache);
 })();
-
-/* V3.12 — personal wedding calendar export */
-function icsEscape(v){return String(v==null?'':v).replace(/\\/g,'\\\\').replace(/\n/g,'\\n').replace(/,/g,'\\,').replace(/;/g,'\\;');}
-function icsStamp(d){const p=n=>String(n).padStart(2,'0');return d.getUTCFullYear()+p(d.getUTCMonth()+1)+p(d.getUTCDate())+'T'+p(d.getUTCHours())+p(d.getUTCMinutes())+p(d.getUTCSeconds())+'Z';}
-function icsLocal(date,time){return String(date).replace(/-/g,'')+'T'+String(time||'00:00').replace(':','')+'00';}
-function calEnd(t){const m=String(t||'').match(/^(\d{1,2}):(\d{2})$/);if(!m)return t;let x=(+m[1]*60)+(+m[2])+30;x%=1440;return String(Math.floor(x/60)).padStart(2,'0')+':'+String(x%60).padStart(2,'0');}
-function buildWeddingIcs(personId,alerts){
-  const s=state.data.settings||{}, tz=String(s.timezone||'Australia/Sydney');
-  const testMode=String(s.reminderTestMode||'FALSE').toUpperCase()==='TRUE';
-  const todayLocal=(()=>{
-    try{
-      const parts=new Intl.DateTimeFormat('en-CA',{timeZone:tz,year:'numeric',month:'2-digit',day:'2-digit'}).formatToParts(new Date());
-      const get=t=>parts.find(p=>p.type===t)?.value||'';
-      return `${get('year')}-${get('month')}-${get('day')}`;
-    }catch(e){return new Date().toISOString().slice(0,10);}
-  })();
-  const testDate=String(s.reminderTestDate||'').slice(0,10);
-  const date=testMode?(testDate||todayLocal):String(s.eventDate||'2026-09-26').slice(0,10);
-  const person=personId==='all'?null:(state.data.people||[]).find(p=>p.id===personId);
-  const tasks=(state.data.tasks||[]).filter(t=>personId==='all'||(t.peopleIds||[]).includes(personId)).slice().sort((a,b)=>String(a.time).localeCompare(String(b.time)));
-  const lines=['BEGIN:VCALENDAR','VERSION:2.0','PRODID:-//JC Wedding Runsheet//EN','CALSCALE:GREGORIAN','METHOD:PUBLISH','X-WR-CALNAME:'+icsEscape(person?`Jennifer & Charlie — ${person.name}`:'Jennifer & Charlie — Wedding Day'),'X-WR-TIMEZONE:'+icsEscape(tz)];
-  tasks.forEach(t=>{
-    const assigned=(t.peopleIds||[]).map(id=>(state.data.people||[]).find(p=>p.id===id)).filter(Boolean).map(p=>p.name);
-    const desc=[t.notes||'',assigned.length?'Assigned: '+assigned.join(', '):''].filter(Boolean).join('\n');
-    lines.push('BEGIN:VEVENT','UID:'+icsEscape(`jc-${date}-${t.id}@runsheet`),'DTSTAMP:'+icsStamp(new Date()),`DTSTART;TZID=${tz}:`+icsLocal(date,t.time),`DTEND;TZID=${tz}:`+icsLocal(date,calEnd(t.time)),'SUMMARY:'+icsEscape(t.title||'Wedding task'));
-    if(desc)lines.push('DESCRIPTION:'+icsEscape(desc));
-    if(alerts)[...new Set((t.reminderMinutes||[]).map(Number).filter(n=>Number.isFinite(n)&&n>=0))].forEach(n=>lines.push('BEGIN:VALARM','ACTION:DISPLAY','DESCRIPTION:'+icsEscape(t.title||'Wedding task'),'TRIGGER:-PT'+Math.round(n)+'M','END:VALARM'));
-    lines.push('END:VEVENT');
-  });
-  lines.push('END:VCALENDAR'); return {text:lines.join('\r\n')+'\r\n',count:tasks.length,date:date,testMode:testMode};
-}
-function downloadWeddingCalendar(personId,alerts){
-  const x=buildWeddingIcs(personId,alerts);if(!x.count){alert('No runsheet tasks are assigned to this selection.');return;}
-  const blob=new Blob([x.text],{type:'text/calendar;charset=utf-8'}),url=URL.createObjectURL(blob),a=document.createElement('a');
-  const p=personId==='all'?'everyone':((state.data.people||[]).find(v=>v.id===personId)?.name||'wedding');
-  a.href=url;a.download=('JC-Wedding-'+p).replace(/[^a-z0-9_-]+/gi,'-')+'.ics';document.body.appendChild(a);a.click();a.remove();setTimeout(()=>URL.revokeObjectURL(url),1500);
-}
-function openCalendarModal(){
-  document.getElementById('calendarModal')?.remove();
-  const people=(state.data.people||[]).slice().sort((a,b)=>a.name.localeCompare(b.name)),m=document.createElement('div');m.id='calendarModal';m.className='calendar-modal-backdrop';
-  m.innerHTML=`<div class="calendar-modal"><button class="calendar-close">×</button><div class="calendar-kicker">26 SEPT 26</div><h2>Add Wedding Schedule</h2><p class="calendar-sub">Choose a person to create a personal calendar from the latest synced runsheet.</p><div id="calendarModeBanner"></div><label class="calendar-label">Schedule for</label><select id="calendarPerson"><option value="all">Everyone — full wedding runsheet</option>${people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} — ${esc(p.role||'')}</option>`).join('')}</select><label class="calendar-check"><input id="calendarAlerts" type="checkbox" checked> Include runsheet reminder times as calendar alerts</label><div id="calendarSummary" class="calendar-summary"></div><button id="calendarDownload" class="calendar-primary">Add / Download Calendar</button><p class="calendar-note"><b>Apple:</b> open the downloaded .ics file and add it to Calendar.<br><b>Google:</b> import the .ics file into Google Calendar.<br><br>This is a snapshot. Pushover and the live runsheet remain authoritative for last-minute changes.</p></div>`;
-  document.body.appendChild(m);
-  const s=state.data.settings||{}, testMode=String(s.reminderTestMode||'FALSE').toUpperCase()==='TRUE';
-  const banner=m.querySelector('#calendarModeBanner');
-  if(testMode){
-    const td=String(s.reminderTestDate||'').slice(0,10);
-    banner.className='calendar-test-banner';
-    banner.innerHTML='🧪 <strong>TEST MODE</strong><br>Calendar events will use '+esc(td||'today')+'. The real wedding date is unchanged.';
-  }else{
-    banner.className='calendar-live-banner';
-    banner.innerHTML='💍 <strong>LIVE WEDDING DATE</strong><br>Calendar events will use 26 Sept 2026.';
-  }
-  const sel=m.querySelector('#calendarPerson'),sum=m.querySelector('#calendarSummary');
-  const upd=()=>{const id=sel.value,p=id==='all'?null:people.find(x=>x.id===id),ts=(state.data.tasks||[]).filter(t=>id==='all'||(t.peopleIds||[]).includes(id)),times=ts.map(t=>t.time).filter(Boolean).sort();sum.innerHTML=`${p?personAvatar(p):''}<strong>${ts.length} task${ts.length===1?'':'s'}</strong>${times.length?` · ${fmtTime(times[0])}–${fmtTime(times[times.length-1])}`:''}`;};
-  sel.onchange=upd;upd();m.querySelector('.calendar-close').onclick=()=>m.remove();m.onclick=e=>{if(e.target===m)m.remove();};m.querySelector('#calendarDownload').onclick=()=>downloadWeddingCalendar(sel.value,m.querySelector('#calendarAlerts').checked);
-}
-function ensureCalendarButton(){ /* V3.14: calendar button is rendered natively in header */ }
-
