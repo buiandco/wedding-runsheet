@@ -391,19 +391,49 @@
     document.getElementById('calendarModal')?.remove();
     const people=(state.data.people||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
     const m=document.createElement('div');m.id='calendarModal';m.className='calendar-modal-backdrop';
-    m.innerHTML=`<div class="calendar-modal"><button class="calendar-close">×</button><div class="calendar-kicker">26 SEPT 26</div><h2>Add My Schedule</h2><p class="calendar-sub">Subscribe once and keep your personal wedding schedule in Calendar.</p><div id="calendarModeBanner"></div><label class="calendar-label">Schedule for</label><select id="calendarPerson"><option value="all">Everyone — full wedding runsheet</option>${people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} — ${esc(p.role||'')}</option>`).join('')}</select><div id="calendarSummary" class="calendar-summary"></div><button id="appleSubscribe" class="calendar-primary"> Subscribe in Apple Calendar</button><button id="copyCalendarUrl" class="calendar-secondary">Copy calendar URL for Google Calendar</button><button id="calendarDownload" class="calendar-tertiary">Download .ics snapshot</button><p class="calendar-note"><b>Apple:</b> tap Subscribe and confirm the calendar subscription.<br><br><b>Google:</b> copy the URL and add it under Other calendars → From URL on Google Calendar web.<br><br>Pushover remains the immediate live-alert system for last-minute changes.</p></div>`;
+    m.innerHTML=`<div class="calendar-modal"><button class="calendar-close">×</button><div class="calendar-kicker">26 SEPT 26</div><h2>Add My Schedule</h2><p class="calendar-sub">Subscribe once and keep your personal wedding schedule in Calendar.</p><div id="calendarModeBanner"></div><label class="calendar-label">Schedule for</label><select id="calendarPerson"><option value="all">Everyone — full wedding runsheet</option>${people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} — ${esc(p.role||'')}</option>`).join('')}</select><div id="calendarSummary" class="calendar-summary"></div><button id="appleSubscribe" class="calendar-primary"> Subscribe in Apple Calendar</button><button id="copyCalendarUrl" class="calendar-secondary">Copy calendar URL for Google Calendar</button><button id="testCalendarFeed" class="calendar-secondary">Test live calendar feed</button><button id="calendarDownload" class="calendar-tertiary">Download .ics snapshot</button><p class="calendar-note"><b>Apple:</b> tap Subscribe and confirm the calendar subscription.<br><br><b>Google:</b> copy the URL and add it under Other calendars → From URL on Google Calendar web.<br><br>Pushover remains the immediate live-alert system for last-minute changes.</p></div>`;
     document.body.appendChild(m);
     const s=state.data.settings||{},testMode=String(s.reminderTestMode||'FALSE').toUpperCase()==='TRUE',banner=m.querySelector('#calendarModeBanner');
     banner.className=testMode?'calendar-test-banner':'calendar-live-banner';
     banner.innerHTML=testMode?'🧪 <strong>TEST MODE</strong><br>The live calendar feed currently uses your test date.':'💍 <strong>LIVE WEDDING DATE</strong><br>The live calendar feed uses 26 Sept 2026.';
     const sel=m.querySelector('#calendarPerson'),sum=m.querySelector('#calendarSummary');
     const upd=()=>{const id=sel.value,p=id==='all'?null:people.find(x=>x.id===id),ts=(state.data.tasks||[]).filter(t=>id==='all'||(t.peopleIds||[]).includes(id)),times=ts.map(t=>t.time).filter(Boolean).sort();sum.innerHTML=`${p?personAvatar(p):''}<strong>${ts.length} task${ts.length===1?'':'s'}</strong>${times.length?` · ${fmtTime(times[0])}–${fmtTime(times[times.length-1])}`:''}`;};
-    const feedUrl=()=>API_URL+(API_URL.includes('?')?'&':'?')+'calendar='+encodeURIComponent(sel.value);
+    const feedUrl=()=>{
+      const base=String(cfg.API_URL||'').trim();
+      if(!base||base.includes('PASTE_YOUR'))throw new Error('Google Apps Script URL is not configured in config.js.');
+      return base+(base.includes('?')?'&':'?')+'calendar='+encodeURIComponent(sel.value);
+    };
     sel.onchange=upd;upd();
     m.querySelector('.calendar-close').onclick=()=>m.remove();m.onclick=e=>{if(e.target===m)m.remove();};
-    m.querySelector('#appleSubscribe').onclick=()=>{const u=feedUrl();location.href=u.replace(/^https?:\/\//i,'webcal://');};
-    m.querySelector('#copyCalendarUrl').onclick=async()=>{try{await navigator.clipboard.writeText(feedUrl());const b=m.querySelector('#copyCalendarUrl');b.textContent='✓ Calendar URL copied';setTimeout(()=>b.textContent='Copy calendar URL for Google Calendar',1800);}catch(e){prompt('Copy this calendar URL:',feedUrl());}};
-    m.querySelector('#calendarDownload').onclick=()=>downloadWeddingCalendar(sel.value,true);
+    m.querySelector('#appleSubscribe').onclick=()=>{
+      try{
+        const u=feedUrl();
+        const webcal=u.replace(/^https?:\/\//i,'webcal://');
+        location.href=webcal;
+      }catch(err){
+        alert('Could not open Apple Calendar: '+(err?.message||err));
+      }
+    };
+    m.querySelector('#copyCalendarUrl').onclick=async()=>{
+      let u;
+      try{u=feedUrl();}catch(err){alert(err?.message||String(err));return;}
+      try{
+        await navigator.clipboard.writeText(u);
+        const b=m.querySelector('#copyCalendarUrl');
+        b.textContent='✓ Calendar URL copied';
+        setTimeout(()=>b.textContent='Copy calendar URL for Google Calendar',1800);
+      }catch(e){
+        prompt('Copy this calendar URL:',u);
+      }
+    };
+    m.querySelector('#testCalendarFeed').onclick=()=>{
+      try{window.open(feedUrl(),'_blank','noopener');}
+      catch(err){alert(err?.message||String(err));}
+    };
+    m.querySelector('#calendarDownload').onclick=async()=>{
+      try{await deliverWeddingCalendar(sel.value,true);}
+      catch(err){alert('Could not create calendar file: '+(err?.message||err));}
+    };
   }
 
   function renderHeader(){
