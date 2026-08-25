@@ -453,7 +453,17 @@
     };
   }
 
-  function renderHeader(){
+  
+function sortTasksByTime(tasks){
+  return (tasks||[]).slice().sort((a,b)=>
+    String(a.time||'').localeCompare(String(b.time||'')) ||
+    (Number(a.sortOrder||0)-Number(b.sortOrder||0)) ||
+    String(a.title||'').localeCompare(String(b.title||'')) ||
+    String(a.id||'').localeCompare(String(b.id||''))
+  );
+}
+
+function renderHeader(){
     const now=new Date(), ctx=currentContext(now), overdue=state.data.tasks.filter(t=>status(t,now)==="overdue").length;
     const settings=state.data.settings||{}, label=compactEventLabel(settings.eventLabel||cfg.EVENT_LABEL||"");
     const remindersOn=String(settings.remindersEnabled||"").toUpperCase()==="TRUE";
