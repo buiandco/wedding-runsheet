@@ -384,14 +384,18 @@
       try{await navigator.share({files:[file],title:'Jennifer & Charlie Wedding Schedule'});return;}catch(e){if(e?.name==='AbortError')return;}
     }
     const url=URL.createObjectURL(file);
-    const a=document.createElement('a');a.href=url;a.download=filename;a.textContent='Open calendar file';a.style.display='none';document.body.appendChild(a);a.click();a.remove();
-    setTimeout(()=>URL.revokeObjectURL(url),10000);
+    const a=document.createElement('a');
+    a.href=url;a.download=filename;a.textContent='Open calendar file';
+    a.className='calendar-download-fallback';
+    document.body.appendChild(a);
+    try{a.click();}catch(e){}
+    setTimeout(()=>{try{a.remove();URL.revokeObjectURL(url);}catch(e){}},30000);
   }
   function openCalendarModal(){
     document.getElementById('calendarModal')?.remove();
     const people=(state.data.people||[]).slice().sort((a,b)=>a.name.localeCompare(b.name));
     const m=document.createElement('div');m.id='calendarModal';m.className='calendar-modal-backdrop';
-    m.innerHTML=`<div class="calendar-modal"><button class="calendar-close">×</button><div class="calendar-kicker">26 SEPT 26</div><h2>Add My Schedule</h2><p class="calendar-sub">Subscribe once and keep your personal wedding schedule in Calendar.</p><div id="calendarModeBanner"></div><label class="calendar-label">Schedule for</label><select id="calendarPerson"><option value="all">Everyone — full wedding runsheet</option>${people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} — ${esc(p.role||'')}</option>`).join('')}</select><div id="calendarSummary" class="calendar-summary"></div><button id="appleSubscribe" class="calendar-primary"> Subscribe in Apple Calendar</button><button id="copyCalendarUrl" class="calendar-secondary">Copy calendar URL for Google Calendar</button><button id="testCalendarFeed" class="calendar-secondary">Test live calendar feed</button><button id="calendarDownload" class="calendar-tertiary">Download .ics snapshot</button><p class="calendar-note"><b>Apple:</b> tap Subscribe and confirm the calendar subscription.<br><br><b>Google:</b> copy the URL and add it under Other calendars → From URL on Google Calendar web.<br><br>Pushover remains the immediate live-alert system for last-minute changes.</p></div>`;
+    m.innerHTML=`<div class="calendar-modal"><button class="calendar-close">×</button><div class="calendar-kicker">26 SEPT 26</div><h2>Add My Schedule</h2><p class="calendar-sub">Subscribe once and keep your personal wedding schedule in Calendar.</p><div id="calendarModeBanner"></div><label class="calendar-label">Schedule for</label><select id="calendarPerson"><option value="all">Everyone — full wedding runsheet</option>${people.map(p=>`<option value="${esc(p.id)}">${esc(p.name)} — ${esc(p.role||'')}</option>`).join('')}</select><div id="calendarSummary" class="calendar-summary"></div><a id="appleSubscribe" class="calendar-primary calendar-link-primary" href="#"> Subscribe in Apple Calendar</a><button id="copyCalendarUrl" class="calendar-secondary">Copy calendar URL for Google Calendar</button><button id="testCalendarFeed" class="calendar-secondary">Test live calendar feed</button><button id="calendarDownload" class="calendar-tertiary">Download .ics snapshot</button><p class="calendar-note"><b>Apple:</b> tap Subscribe and confirm the calendar subscription.<br><br><b>Google:</b> copy the URL and add it under Other calendars → From URL on Google Calendar web.<br><br>Pushover remains the immediate live-alert system for last-minute changes.</p></div>`;
     document.body.appendChild(m);
     const s=state.data.settings||{},testMode=String(s.reminderTestMode||'FALSE').toUpperCase()==='TRUE',banner=m.querySelector('#calendarModeBanner');
     banner.className=testMode?'calendar-test-banner':'calendar-live-banner';
@@ -403,17 +407,27 @@
       if(!base||base.includes('PASTE_YOUR'))throw new Error('Google Apps Script URL is not configured in config.js.');
       return base+(base.includes('?')?'&':'?')+'calendar='+encodeURIComponent(sel.value);
     };
-    sel.onchange=upd;upd();
-    m.querySelector('.calendar-close').onclick=()=>m.remove();m.onclick=e=>{if(e.target===m)m.remove();};
-    m.querySelector('#appleSubscribe').onclick=()=>{
+    const appleLink=m.querySelector('#appleSubscribe');
+    const updateCalendarLinks=()=>{
       try{
         const u=feedUrl();
-        const webcal=u.replace(/^https?:\/\//i,'webcal://');
-        location.href=webcal;
+        appleLink.href=u.replace(/^https?:\/\//i,'webcal://');
+        appleLink.removeAttribute('aria-disabled');
       }catch(err){
-        alert('Could not open Apple Calendar: '+(err?.message||err));
+        appleLink.href='#';
+        appleLink.setAttribute('aria-disabled','true');
       }
     };
+    sel.onchange=()=>{upd();updateCalendarLinks();};
+    upd();
+    updateCalendarLinks();
+    m.querySelector('.calendar-close').onclick=()=>m.remove();m.onclick=e=>{if(e.target===m)m.remove();};
+    appleLink.addEventListener('click',e=>{
+      if(appleLink.getAttribute('aria-disabled')==='true'){
+        e.preventDefault();
+        try{feedUrl();}catch(err){alert('Could not open Apple Calendar: '+(err?.message||err));}
+      }
+    });
     m.querySelector('#copyCalendarUrl').onclick=async()=>{
       let u;
       try{u=feedUrl();}catch(err){alert(err?.message||String(err));return;}
@@ -427,8 +441,11 @@
       }
     };
     m.querySelector('#testCalendarFeed').onclick=()=>{
-      try{window.open(feedUrl(),'_blank','noopener');}
-      catch(err){alert(err?.message||String(err));}
+      try{
+        const u=feedUrl();
+        const w=window.open(u,'_blank');
+        if(!w) location.href=u;
+      }catch(err){alert(err?.message||String(err));}
     };
     m.querySelector('#calendarDownload').onclick=async()=>{
       try{await deliverWeddingCalendar(sel.value,true);}
