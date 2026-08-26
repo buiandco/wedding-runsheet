@@ -22,7 +22,9 @@
     syncWarning: "",
     pendingDone: {},
     activeWrites: 0,
-    celebratingTaskId: null
+    celebratingTaskId: null,
+    revision: 0,
+    localUndo: {}
   };
 
   const app = document.getElementById("app");
@@ -72,6 +74,15 @@
   };
 
   function clientId(prefix) { const r=(globalThis.crypto && crypto.randomUUID)?crypto.randomUUID().replace(/-/g,"").slice(0,12):Date.now().toString(36)+Math.random().toString(36).slice(2,7); return prefix+r; }
+
+  function getPersistentClientId(){
+    try{
+      let id=localStorage.getItem('weddingClientId');
+      if(!id){id=clientId('c');localStorage.setItem('weddingClientId',id);}
+      return id;
+    }catch{return clientId('c');}
+  }
+  const THIS_CLIENT_ID=getPersistentClientId();
   function esc(v="") { return String(v).replace(/[&<>'"]/g, c => ({"&":"&amp;","<":"&lt;",">":"&gt;","'":"&#39;",'"':"&quot;"}[c])); }
   function fmtTime(hhmm) { const [h,m] = (hhmm || "00:00").split(":").map(Number); const p=h>=12?"PM":"AM"; const h12=h%12===0?12:h%12; return `${h12}:${String(m).padStart(2,"0")} ${p}`; }
   function personInitials(person){
@@ -106,7 +117,7 @@
     return raw.replace(/\s+\d{1,2}:\d{2}:\d{2}.*$/i, "").replace(/\s+GMT[+-]\d{4}.*$/i, "").trim();
   }
   function timeToday(hhmm, base=new Date()) { const [h,m]=(hhmm||"00:00").split(":").map(Number); const d=new Date(base); d.setHours(h,m,0,0); return d; }
-  function sortedTasks() { return [...state.data.tasks].sort((a,b)=>(Number(a.sortOrder)||0)-(Number(b.sortOrder)||0) || String(a.time).localeCompare(String(b.time))); }
+  function sortedTasks() { return [...state.data.tasks].sort((a,b)=>String(a.time||'').localeCompare(String(b.time||'')) || (Number(a.sortOrder||0)-Number(b.sortOrder||0)) || String(a.id||'').localeCompare(String(b.id||''))); }
   function status(task, now=new Date()) { if (task.done) return "complete"; return now >= timeToday(task.time, now) ? "overdue" : "upcoming"; }
   function personMap() { return Object.fromEntries(state.data.people.map(p => [p.id,p])); }
   function flash(type, msg) { state[type] = msg; render(); setTimeout(()=>{ if(state[type]===msg){state[type]="";render();}}, 2500); }
@@ -149,7 +160,7 @@
     // because a lost response after a successful write could otherwise create duplicates.
     try { return await attempt(); }
     catch (err) {
-      if (action === "getData" || action === "verifyPin") {
+      if (action === "getData" || action === "getRevision" || action === "verifyPin") {
         await new Promise(r => setTimeout(r, 650));
         return await attempt();
       }
@@ -158,12 +169,12 @@
   }
 
   async function loadData(silent=false) {
-  v322SetSync('syncing');
     // Never let background polling race an active write. The optimistic UI remains
     // authoritative until Google has confirmed the write.
     if (silent && state.activeWrites > 0) return;
     if (state.syncing) return;
     state.syncing = true;
+    v322SetSync('syncing');
     if (!silent && !state.data.tasks.length && !state.data.people.length && !state.data.vendors.length) { state.loading = true; render(); }
     try {
       let incoming;
@@ -174,14 +185,21 @@
       const nowMs = Date.now();
       for (const [id, guard] of Object.entries(state.pendingDone)) {
         const t = (incoming.tasks || []).find(x => x.id === id);
-        if (!t || nowMs >= guard.until || t.done === guard.done) {
+        const incomingVersion = t?.updatedAt ? new Date(t.updatedAt).getTime() : 0;
+        const guardedVersion = guard.updatedAt ? new Date(guard.updatedAt).getTime() : 0;
+        // A genuinely newer server mutation (for example another phone reopening
+        // the task) always wins immediately. The guard only masks stale reads.
+        if (!t || nowMs >= guard.until || t.done === guard.done || (incomingVersion && guardedVersion && incomingVersion > guardedVersion)) {
           delete state.pendingDone[id];
         } else {
           t.done = guard.done;
+          if(guard.updatedAt)t.updatedAt=guard.updatedAt;
+          if(Object.prototype.hasOwnProperty.call(guard,'completedAt'))t.completedAt=guard.completedAt;
+          if(Object.prototype.hasOwnProperty.call(guard,'completedByClient'))t.completedByClient=guard.completedByClient;
         }
       }
 
-      state.data = incoming;
+      state.data = incoming; state.revision = Number(incoming.revision||state.revision||0);
       state.lastSync = new Date(); v322SetSync('live'); v322PreloadPeople();
       state.error = "";
       state.syncWarning = "";
@@ -234,7 +252,7 @@
 
   function applyDemoMutation(action,p) {
     const d=state.data;
-    if(action==="toggleDone"){const t=d.tasks.find(x=>x.id===p.id); if(t)t.done=!t.done;}
+    if(action==="setDone"||action==="toggleDone"){const t=d.tasks.find(x=>x.id===p.id); if(t)t.done=action==="setDone"?!!p.done:true;}
     if(action==="saveTask"){const i=d.tasks.findIndex(x=>x.id===p.id); i>=0?d.tasks[i]={...d.tasks[i],...p}:d.tasks.push({...p,id:p.id||`t${Date.now()}`,done:false});}
     if(action==="deleteTask") d.tasks=d.tasks.filter(x=>x.id!==p.id);
     if(action==="savePerson"){const i=d.people.findIndex(x=>x.id===p.id); i>=0?d.people[i]={...d.people[i],...p}:d.people.push({...p,id:p.id||`p${Date.now()}`});}
@@ -263,48 +281,61 @@
     finally { state.unlocking=false; render(); }
   }
 
-  async function toggleDone(id) {
+  async function setTaskDone(id,desired,options={}) {
     const task=state.data.tasks.find(t=>t.id===id); if(!task)return;
-    const previous = !!task.done;
-    const desired = !previous;
+    const previous=!!task.done;
+    const previousVersion=task.updatedAt||'';
+    const forceReopen=!!options.forceReopen;
 
-    // Install the guard BEFORE rendering/sending. A getData request that was already
-    // in flight is therefore unable to paint the old Sheet value back over this tap.
-    state.pendingDone[id] = {done:desired, until:Date.now()+30000, phase:"writing"};
-    state.activeWrites += 1;
-    task.done = desired;
-    state.celebratingTaskId = desired ? id : null;
-    state.error = "";
-    render();
-    if (desired) setTimeout(()=>{ if(state.celebratingTaskId===id){ state.celebratingTaskId=null; render(); } }, 900);
-
-    try {
-      if(!cfg.USE_DEMO_DATA) {
-        const out=await api("toggleDone",{id},false);
-        const confirmed = typeof out.done === "boolean" ? out.done : desired;
-        // loadData may have replaced state.data while this request was in flight, so
-        // always re-find the CURRENT task object instead of mutating the old reference.
-        const currentTask = state.data.tasks.find(t=>t.id===id);
-        if(currentTask) currentTask.done = confirmed;
-        state.pendingDone[id] = {done:confirmed, until:Date.now()+30000, phase:"confirmed"};
-        state.lastSync=new Date(); v322SetSync('live'); v322PreloadPeople();
-        state.syncWarning="";
-        writeCache();
+    state.pendingDone[id]={done:desired,until:Date.now()+30000,phase:'writing'};
+    state.activeWrites+=1;
+    task.done=desired;
+    state.error='';
+    if(desired){
+      const nowIso=new Date().toISOString();
+      task.completedAt=nowIso; task.completedByClient=THIS_CLIENT_ID;
+      state.localUndo[id]=Date.now()+15000;
+      state.celebratingTaskId=id;
+      setTimeout(()=>{
+        if(state.celebratingTaskId===id)state.celebratingTaskId=null;
+        if(state.localUndo[id] && Date.now()>=state.localUndo[id])delete state.localUndo[id];
         render();
-      } else {
-        state.pendingDone[id] = {done:desired, until:Date.now()+3000, phase:"confirmed"};
-        writeCache();
-      }
-    } catch(e){
-      const currentTask = state.data.tasks.find(t=>t.id===id);
-      if(currentTask) currentTask.done=previous;
-      delete state.pendingDone[id];
-      state.celebratingTaskId=null;
-      state.error=e.message;
-      render();
-    } finally {
-      state.activeWrites = Math.max(0, state.activeWrites - 1);
+      },15050);
+    }else{
+      delete state.localUndo[id];task.completedAt='';task.completedByClient='';
     }
+    render();
+
+    try{
+      if(!cfg.USE_DEMO_DATA){
+        const out=await api('setDone',{id,done:desired,clientId:THIS_CLIENT_ID,expectedUpdatedAt:previousVersion,forceReopen},false);
+        if(out.conflict){
+          delete state.pendingDone[id];delete state.localUndo[id];
+          state.error='This task changed on another phone. I refreshed to the latest version.';
+          await loadData(true);return;
+        }
+        const current=state.data.tasks.find(t=>t.id===id);
+        if(current){
+          current.done=!!out.done;current.updatedAt=out.updatedAt||current.updatedAt;
+          current.completedAt=out.completedAt||'';current.completedByClient=out.completedByClient||'';
+        }
+        state.revision=Number(out.revision||state.revision||0);
+        state.pendingDone[id]={done:!!out.done,until:Date.now()+10000,phase:'confirmed',updatedAt:out.updatedAt||'',completedAt:out.completedAt||'',completedByClient:out.completedByClient||''};
+        state.lastSync=new Date();v322SetSync('live');writeCache();render();
+      }else{writeCache();}
+    }catch(e){
+      const current=state.data.tasks.find(t=>t.id===id);
+      if(current){current.done=previous;current.updatedAt=previousVersion;}
+      delete state.pendingDone[id];delete state.localUndo[id];state.celebratingTaskId=null;
+      state.error=e.message;render();
+    }finally{state.activeWrites=Math.max(0,state.activeWrites-1);}
+  }
+
+  function completeTask(id){return setTaskDone(id,true);}
+  function undoTask(id){return setTaskDone(id,false);}
+  function reopenTask(id){
+    if(!confirm('Reopen this completed task? This is intended for correcting an accidental completion.'))return;
+    return setTaskDone(id,false,{forceReopen:true});
   }
 
   async function enableNotifications(){
@@ -501,7 +532,7 @@ function renderHeader(){
         <div class="hero-divider"><span>✦</span></div>
         <div class="header-meta icon-controls">
           <button class="header-chip control-icon" data-action="refresh" title="Refresh runsheet" aria-label="Refresh runsheet">↻</button>
-          <button class="header-chip control-icon calendar-date-icon" data-action="calendar" title="Add wedding schedule to calendar" aria-label="Add wedding schedule to calendar"><span class="calendar-date-top">SEP</span><span class="calendar-date-day">26</span></button>
+          <button class="header-chip control-icon calendar-date-icon" data-action="calendar" title="Add wedding schedule to calendar" aria-label="Add wedding schedule to calendar"><span class="calendar-mini"><span class="calendar-rings"></span><span class="calendar-date-day">26</span></span></button>
           <button class="header-chip control-icon ${remindersOn?"on":""}" data-action="reminders" title="Wedding reminders" aria-label="Wedding reminders">🔔</button>
           <button class="header-chip control-icon ${state.adminUnlocked?"unlocked":""}" data-action="admin" title="${state.adminUnlocked?"Edit mode unlocked":"Unlock edit mode"}" aria-label="${state.adminUnlocked?"Edit mode unlocked":"Unlock edit mode"}">${state.adminUnlocked?"🔓":"🔒"}</button>
         </div>
@@ -528,9 +559,10 @@ function renderHeader(){
     const s=status(t), pm=personMap(), assignedPeople=(t.peopleIds||[]).map(id=>pm[id]).filter(Boolean), names=assignedPeople.map(p=>p.name).join(', '), peopleHtml=assignedPeople.map(p=>`<span class="task-person">${personInline(p)}</span>`).join('');
     const celebration = state.celebratingTaskId === t.id ? " just-completed" : "";
     if(compact){
-      return `<button class="completed-inline-card" data-restore="${esc(t.id)}" title="Completed — tap to restore"><span class="stack-check">✓</span><span class="stack-time">${fmtTime(t.time)}</span><span class="stack-main"><span class="stack-title">${esc(t.title)}</span>${names?`<span class="stack-who">${assignedPeople.slice(0,4).map(p=>personAvatar(p,'micro')).join('')}<span>${esc(names)}</span></span>`:''}</span><span class="stack-back">↶</span></button>`;
+      const canQuickUndo=t.completedByClient===THIS_CLIENT_ID && ((state.localUndo[t.id]||0)>Date.now() || (t.completedAt && (Date.now()-new Date(t.completedAt).getTime())<=15000));
+      return `<div class="completed-inline-card protected-complete" title="Completed task"><span class="stack-check">✓</span><span class="stack-time">${fmtTime(t.time)}</span><span class="stack-main"><span class="stack-title">${esc(t.title)}</span>${names?`<span class="stack-who">${assignedPeople.slice(0,4).map(p=>personAvatar(p,'micro')).join('')}<span>${esc(names)}</span></span>`:''}${t.completedAt?`<span class="completed-meta">Done ${new Date(t.completedAt).toLocaleTimeString('en-AU',{hour:'numeric',minute:'2-digit',second:'2-digit',hour12:true})}</span>`:''}</span>${canQuickUndo?`<button class="stack-action undo-action" data-undo="${esc(t.id)}">Undo</button>`:`<button class="stack-action reopen-action" data-reopen="${esc(t.id)}">Reopen</button>`}</div>`;
     }
-    return `<div class="item ${s}${celebration}"><div class="marker"><span class="dot">${s==='complete'?'✓':''}</span></div><div class="card"><div class="item-time">${fmtTime(t.time)}</div><div class="item-title">${esc(t.title)}</div>${peopleHtml?`<div class="item-who people-with-faces">${peopleHtml}</div>`:''}${t.notes?`<div class="item-notes">${esc(t.notes)}</div>`:''}${s==='overdue'?`<div class="status">⚠ Outstanding</div>`:''}<div><button class="check-btn" data-toggle="${esc(t.id)}">Mark done</button></div><span class="card-ornament"></span></div></div>`;
+    return `<div class="item ${s}${celebration}"><div class="marker"><span class="dot">${s==='complete'?'✓':''}</span></div><div class="card"><div class="item-time">${fmtTime(t.time)}</div><div class="item-title">${esc(t.title)}</div>${peopleHtml?`<div class="item-who people-with-faces">${peopleHtml}</div>`:''}${t.notes?`<div class="item-notes">${esc(t.notes)}</div>`:''}${s==='overdue'?`<div class="status">⚠ Outstanding</div>`:''}<div><button class="check-btn" data-complete="${esc(t.id)}">Mark done</button></div><span class="card-ornament"></span></div></div>`;
   }
 
   function dayTimeline(tasks){
@@ -552,7 +584,7 @@ function renderHeader(){
   function renderRunsheet(){
     const tasks=sortedTasks();
     if(!tasks.length) return `<div class="panel"><div class="empty">No tasks have been added yet.</div></div>`;
-    return `<div class="panel"><div class="day-overview-note"><span>Full day schedule</span><small>Completed tasks collapse but stay in their original time position. Tap one to restore it.</small></div>${dayTimeline(tasks)}</div>`;
+    return `<div class="panel"><div class="day-overview-note"><span>Full day schedule</span><small>Completed tasks stay visible and protected. The same phone gets a 15-second Undo; later reopening requires a deliberate confirmation.</small></div>${dayTimeline(tasks)}</div>`;
   }
   function renderPeople(){
     const p=state.data.people, selected=state.selectedPerson, tasks=selected?sortedTasks().filter(t=>(t.peopleIds||[]).includes(selected)):[];
@@ -629,8 +661,9 @@ function renderHeader(){
 
   function bindEvents(){
     app.querySelectorAll('[data-tab]').forEach(b=>b.onclick=()=>{state.tab=b.dataset.tab;render();});
-    app.querySelectorAll('[data-toggle]').forEach(b=>b.onclick=()=>toggleDone(b.dataset.toggle));
-    app.querySelectorAll('[data-restore]').forEach(b=>b.onclick=()=>toggleDone(b.dataset.restore));
+    app.querySelectorAll('[data-complete]').forEach(b=>b.onclick=()=>completeTask(b.dataset.complete));
+    app.querySelectorAll('[data-undo]').forEach(b=>b.onclick=()=>undoTask(b.dataset.undo));
+    app.querySelectorAll('[data-reopen]').forEach(b=>b.onclick=()=>reopenTask(b.dataset.reopen));
     app.querySelectorAll('[data-person]').forEach(b=>b.onclick=()=>{state.selectedPerson=b.dataset.person;render();});
     app.querySelector('[data-action="refresh"]')?.addEventListener('click',()=>loadData(true));
     app.querySelector('[data-action="calendar"]')?.addEventListener('click',openCalendarModal);
@@ -639,7 +672,7 @@ function renderHeader(){
     app.querySelectorAll('[data-close]').forEach(b=>b.onclick=()=>{state.modal=null;render();});
     app.querySelector('[data-test-reminder]')?.addEventListener('click',async()=>{const sel=app.querySelector('#testReminderPerson');if(!sel)return;const personId=sel.value;try{state.saving=true;await api('sendTestReminder',{personId},true);state.modal=null;state.success='Test notification sent';render();setTimeout(()=>{if(state.success==='Test notification sent'){state.success='';render();}},2500);}catch(e){state.error=e.message;render();}finally{state.saving=false;}});
     app.querySelector('[data-lock]')?.addEventListener('click',()=>{lockAdmin();state.tab='runsheet';render();});
-    app.querySelector('[data-new-task]')?.addEventListener('click',()=>{const max=Math.max(0,...state.data.tasks.map(t=>Number(t.sortOrder)||0));state.modal={type:'task',isNew:true,item:{id:clientId('t'),time:'09:00',title:'',peopleIds:[],notes:'',sortOrder:max+10,reminderMinutes:[],reminderPriority:'normal'}};render();});
+    app.querySelector('[data-new-task]')?.addEventListener('click',()=>{state.modal={type:'task',isNew:true,item:{id:clientId('t'),time:'09:00',title:'',peopleIds:[],notes:'',sortOrder:0,reminderMinutes:[],reminderPriority:'normal'}};render();});
     app.querySelector('[data-new-person]')?.addEventListener('click',()=>{state.modal={type:'person',isNew:true,item:{id:clientId('p'),name:'',role:'',pushoverDevice:'',imageUrl:''}};render();});
     app.querySelector('[data-new-vendor]')?.addEventListener('click',()=>{state.modal={type:'vendor',isNew:true,item:{id:clientId('v'),role:'',name:'',phone:'',email:'',notes:''}};render();});
     app.querySelectorAll('[data-edit-task]').forEach(b=>b.onclick=()=>{state.modal={type:'task',item:state.data.tasks.find(x=>x.id===b.dataset.editTask)};render();});
@@ -656,8 +689,22 @@ function renderHeader(){
     app.querySelector('[data-delete-vendor]')?.addEventListener('click',e=>{if(confirm('Delete this vendor?'))saveAction('deleteVendor',{id:e.currentTarget.dataset.deleteVendor},true,'Vendor deleted');});
   }
 
+
+  let revisionPollBusy=false;
+  async function pollRevision(){
+    if(revisionPollBusy||state.activeWrites>0||state.saving||state.modal||document.hidden||cfg.USE_DEMO_DATA)return;
+    revisionPollBusy=true;
+    try{
+      const out=await api('getRevision');
+      const remote=Number(out.revision||0);
+      if(remote && remote!==Number(state.revision||0))await loadData(true);
+    }catch(e){ /* full poll remains the fallback */ }
+    finally{revisionPollBusy=false;}
+  }
+
   setInterval(()=>{const el=document.getElementById('liveClock');if(el)el.textContent=fmtClock(new Date());},1000);
-  setInterval(()=>{ if (!state.modal && !state.saving) loadData(true); }, Math.max(5000, Number(cfg.POLL_MS)||10000));
+  setInterval(pollRevision,3000);
+  setInterval(()=>{ if (!state.modal && !state.saving) loadData(true); }, Math.max(30000, Number(cfg.POLL_MS)||30000));
   const hasCache = readCache();
   if (hasCache) render();
   loadData(hasCache);
@@ -673,4 +720,3 @@ document.addEventListener('click',e=>{
   }
 });
 
-document.addEventListener('DOMContentLoaded',()=>setTimeout(v322PreloadPeople,1200));
