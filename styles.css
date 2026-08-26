@@ -692,3 +692,17 @@ button:disabled,input:disabled{opacity:.58;cursor:wait}.primary-btn:disabled{cur
 .calendar-link-primary{display:block;text-align:center;text-decoration:none;box-sizing:border-box}
 .calendar-link-primary[aria-disabled="true"]{opacity:.5;pointer-events:auto}
 .calendar-download-fallback{position:fixed;left:50%;bottom:18px;transform:translateX(-50%);z-index:10001;background:#735b4b;color:#fff;padding:12px 16px;border-radius:999px;text-decoration:none;font-weight:800;box-shadow:0 8px 24px rgba(0,0,0,.18)}
+
+
+/* V3.22 — polish/performance */
+.calendar-date-icon{position:relative;display:inline-flex!important;flex-direction:column;align-items:center;justify-content:center;line-height:1;padding:0!important}
+.calendar-date-top{display:block;font-size:7px;font-weight:900;letter-spacing:.05em;opacity:.7;margin-top:2px}
+.calendar-date-day{display:block;font-size:17px;font-weight:900;line-height:1;margin-top:1px;font-variant-numeric:tabular-nums}
+.sync-badge{width:max-content;max-width:calc(100% - 40px);margin:6px auto 0;padding:4px 9px;border-radius:999px;font-size:10px;font-weight:800;letter-spacing:.02em;user-select:none}
+.sync-live{background:rgba(116,145,112,.10);color:#63765e}
+.sync-syncing{background:rgba(184,147,95,.12);color:#806845}
+.sync-delayed,.sync-offline{background:rgba(156,74,56,.10);color:#8b4c3e}
+.v322TapFeedback{transform:scale(.96);transition:transform .12s ease}
+.person-avatar img{content-visibility:auto}
+@media(max-width:420px){.calendar-date-day{font-size:16px}.sync-badge{font-size:9.5px}}
+@media(prefers-reduced-motion:reduce){.v322TapFeedback{transition:none!important}}

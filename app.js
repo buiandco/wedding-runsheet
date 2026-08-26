@@ -158,6 +158,7 @@
   }
 
   async function loadData(silent=false) {
+  v322SetSync('syncing');
     // Never let background polling race an active write. The optimistic UI remains
     // authoritative until Google has confirmed the write.
     if (silent && state.activeWrites > 0) return;
@@ -181,7 +182,7 @@
       }
 
       state.data = incoming;
-      state.lastSync = new Date();
+      state.lastSync = new Date(); v322SetSync('live'); v322PreloadPeople();
       state.error = "";
       state.syncWarning = "";
       writeCache();
@@ -202,7 +203,7 @@
     const p = {...payload};
     if (out.id && !p.id) p.id = out.id;
     applyDemoMutation(action, p);
-    state.lastSync = new Date();
+    state.lastSync = new Date(); v322SetSync('live'); v322PreloadPeople();
     writeCache();
   }
 
@@ -286,7 +287,7 @@
         const currentTask = state.data.tasks.find(t=>t.id===id);
         if(currentTask) currentTask.done = confirmed;
         state.pendingDone[id] = {done:confirmed, until:Date.now()+30000, phase:"confirmed"};
-        state.lastSync=new Date();
+        state.lastSync=new Date(); v322SetSync('live'); v322PreloadPeople();
         state.syncWarning="";
         writeCache();
         render();
@@ -463,6 +464,29 @@ function sortTasksByTime(tasks){
   );
 }
 
+
+function v322SyncText(status){
+  if(status==='syncing')return 'Syncing…';
+  if(status==='delayed')return 'Sync delayed — showing saved copy';
+  if(status==='offline')return 'Offline — showing saved copy';
+  return 'Live';
+}
+function v322SetSync(status){
+  state.v322Sync=status||'live';
+  const el=document.getElementById('syncBadge');
+  if(!el)return;
+  el.className='sync-badge sync-'+state.v322Sync;
+  const last=state.lastSync instanceof Date ? ' · '+fmtClock(state.lastSync) : '';
+  el.textContent=v322SyncText(state.v322Sync)+(state.v322Sync==='live'?last:'');
+}
+function v322PreloadPeople(){
+  (state.data?.people||[]).forEach(p=>{
+    const src=String(p.imageUrl||'').trim();
+    if(!src)return;
+    const im=new Image();im.decoding='async';im.src=src;
+  });
+}
+
 function renderHeader(){
     const now=new Date(), ctx=currentContext(now), overdue=state.data.tasks.filter(t=>status(t,now)==="overdue").length;
     const settings=state.data.settings||{}, label=compactEventLabel(settings.eventLabel||cfg.EVENT_LABEL||"");
@@ -477,7 +501,7 @@ function renderHeader(){
         <div class="hero-divider"><span>✦</span></div>
         <div class="header-meta icon-controls">
           <button class="header-chip control-icon" data-action="refresh" title="Refresh runsheet" aria-label="Refresh runsheet">↻</button>
-          <button class="header-chip control-icon" data-action="calendar" title="Add wedding schedule to calendar" aria-label="Add wedding schedule to calendar">📅</button>
+          <button class="header-chip control-icon calendar-date-icon" data-action="calendar" title="Add wedding schedule to calendar" aria-label="Add wedding schedule to calendar"><span class="calendar-date-top">SEP</span><span class="calendar-date-day">26</span></button>
           <button class="header-chip control-icon ${remindersOn?"on":""}" data-action="reminders" title="Wedding reminders" aria-label="Wedding reminders">🔔</button>
           <button class="header-chip control-icon ${state.adminUnlocked?"unlocked":""}" data-action="admin" title="${state.adminUnlocked?"Edit mode unlocked":"Unlock edit mode"}" aria-label="${state.adminUnlocked?"Edit mode unlocked":"Unlock edit mode"}">${state.adminUnlocked?"🔓":"🔒"}</button>
         </div>
@@ -638,3 +662,15 @@ function renderHeader(){
   if (hasCache) render();
   loadData(hasCache);
 })();
+
+document.addEventListener('click',e=>{
+  const b=e.target.closest('button');
+  if(!b)return;
+  const t=(b.textContent||'').trim().toLowerCase();
+  if(t==='mark done'||t==='mark not done'||t==='undo'){
+    b.classList.add('v322TapFeedback');
+    setTimeout(()=>b.classList.remove('v322TapFeedback'),220);
+  }
+});
+
+document.addEventListener('DOMContentLoaded',()=>setTimeout(v322PreloadPeople,1200));
