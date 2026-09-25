@@ -702,9 +702,35 @@ function renderHeader(){
     finally{revisionPollBusy=false;}
   }
 
+  // V3.20 live-sync reliability: fast revision checks plus an independent full-data
+  // safety refresh. Mobile browsers may suspend timers while the screen is locked,
+  // so returning to the page/reconnecting also forces an immediate authoritative read.
+  const REVISION_POLL_MS = Math.max(3000, Number(cfg.REVISION_POLL_MS) || 3000);
+  const FULL_SYNC_MS = Math.max(15000, Number(cfg.FULL_SYNC_MS) || Number(cfg.POLL_MS) || 20000);
+  let lastResumeSyncAt = 0;
+
+  function canBackgroundSync(){
+    return !state.modal && !state.saving && state.activeWrites === 0 && !cfg.USE_DEMO_DATA;
+  }
+
+  function forceResumeSync(){
+    if(document.hidden || !canBackgroundSync()) return;
+    // visibilitychange + focus + pageshow can fire together; coalesce them.
+    const now=Date.now();
+    if(now-lastResumeSyncAt<1200)return;
+    lastResumeSyncAt=now;
+    loadData(true);
+  }
+
   setInterval(()=>{const el=document.getElementById('liveClock');if(el)el.textContent=fmtClock(new Date());},1000);
-  setInterval(pollRevision,3000);
-  setInterval(()=>{ if (!state.modal && !state.saving) loadData(true); }, Math.max(30000, Number(cfg.POLL_MS)||30000));
+  setInterval(pollRevision,REVISION_POLL_MS);
+  setInterval(()=>{ if (!document.hidden && canBackgroundSync()) loadData(true); }, FULL_SYNC_MS);
+
+  document.addEventListener('visibilitychange',()=>{if(!document.hidden)forceResumeSync();});
+  window.addEventListener('focus',forceResumeSync);
+  window.addEventListener('pageshow',forceResumeSync);
+  window.addEventListener('online',forceResumeSync);
+
   const hasCache = readCache();
   if (hasCache) render();
   loadData(hasCache);
