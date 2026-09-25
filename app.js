@@ -24,9 +24,7 @@
     activeWrites: 0,
     celebratingTaskId: null,
     revision: 0,
-    localUndo: {},
-    syncFailures: 0,
-    lastSyncAttempt: null
+    localUndo: {}
   };
 
   const app = document.getElementById("app");
@@ -203,17 +201,12 @@
 
       state.data = incoming; state.revision = Number(incoming.revision||state.revision||0);
       state.lastSync = new Date(); v322SetSync('live'); v322PreloadPeople();
-      state.syncFailures = 0;
       state.error = "";
       state.syncWarning = "";
       writeCache();
     } catch (e) {
       if (silent && (state.data.tasks.length || state.data.people.length || state.data.vendors.length)) {
-        state.syncFailures = Number(state.syncFailures||0) + 1;
-        const age = state.lastSync instanceof Date ? Date.now()-state.lastSync.getTime() : Infinity;
-        // One transient Apps Script/iPhone wake failure is not a "delayed" sync.
-        // Warn only after repeated failures or when the last confirmed data is genuinely stale.
-        state.syncWarning = (state.syncFailures >= 2 || age >= (Number(cfg.SYNC_STALE_MS)||60000)) ? e.message : "";
+        state.syncWarning = e.message;
       } else {
         state.error = e.message;
       }
@@ -698,55 +691,20 @@ function renderHeader(){
 
 
   let revisionPollBusy=false;
-  let lastRevisionCheck=0;
-  async function pollRevision(force=false){
-    if(revisionPollBusy||state.activeWrites>0||state.saving||state.modal||cfg.USE_DEMO_DATA)return;
-    if(document.hidden && !force)return;
-    const now=Date.now();
-    const minGap=Math.max(3000,Number(cfg.REVISION_POLL_MS)||5000);
-    if(!force && now-lastRevisionCheck<minGap)return;
-    revisionPollBusy=true; lastRevisionCheck=now;
+  async function pollRevision(){
+    if(revisionPollBusy||state.activeWrites>0||state.saving||state.modal||document.hidden||cfg.USE_DEMO_DATA)return;
+    revisionPollBusy=true;
     try{
       const out=await api('getRevision');
       const remote=Number(out.revision||0);
-      state.syncFailures=0;
       if(remote && remote!==Number(state.revision||0))await loadData(true);
-      else if(state.lastSync instanceof Date){
-        // A successful revision response proves the connection is healthy even
-        // when a full data download was unnecessary.
-        state.syncWarning="";
-        v322SetSync('live');
-      }
-    }catch(e){
-      // Do not alarm the user on one missed lightweight heartbeat.
-      // The full-data refresh and wake/reconnect recovery remain the fallback.
-    }finally{revisionPollBusy=false;}
-  }
-
-  async function recoverSync(reason){
-    if(cfg.USE_DEMO_DATA||document.hidden||state.activeWrites>0||state.saving)return;
-    // On iPhone, timers can be suspended while Safari is backgrounded/locked.
-    // When the page wakes or network returns, do a real data refresh immediately.
-    await loadData(true);
-    if(!state.syncWarning) await pollRevision(true);
+    }catch(e){ /* full poll remains the fallback */ }
+    finally{revisionPollBusy=false;}
   }
 
   setInterval(()=>{const el=document.getElementById('liveClock');if(el)el.textContent=fmtClock(new Date());},1000);
-  setInterval(()=>pollRevision(false),Math.max(3000,Number(cfg.REVISION_POLL_MS)||5000));
-  setInterval(()=>{
-    if(!state.modal&&!state.saving&&!document.hidden)loadData(true);
-  },Math.max(15000,Number(cfg.FULL_REFRESH_MS)||45000));
-
-  document.addEventListener('visibilitychange',()=>{
-    if(!document.hidden)setTimeout(()=>recoverSync('visible'),150);
-  });
-  window.addEventListener('pageshow',()=>setTimeout(()=>recoverSync('pageshow'),150));
-  window.addEventListener('online',()=>setTimeout(()=>recoverSync('online'),150));
-  window.addEventListener('focus',()=>{
-    const age=state.lastSync instanceof Date?Date.now()-state.lastSync.getTime():Infinity;
-    if(age>10000)setTimeout(()=>recoverSync('focus'),150);
-  });
-
+  setInterval(pollRevision,3000);
+  setInterval(()=>{ if (!state.modal && !state.saving) loadData(true); }, Math.max(30000, Number(cfg.POLL_MS)||30000));
   const hasCache = readCache();
   if (hasCache) render();
   loadData(hasCache);
